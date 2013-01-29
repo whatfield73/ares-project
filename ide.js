@@ -11,8 +11,8 @@ if (version <= 0.7) {
 
 var fs = require("fs"),
     path = require("path"),
-    express = require(path.resolve(__dirname, "hermes/filesystem/node_modules/express")),
-    optimist = require(path.resolve(__dirname, "hermes/node_modules/optimist")),
+    express = require("express"),
+    optimist = require("optimist"),
     util  = require('util'),
     spawn = require('child_process').spawn,
     querystring = require("querystring"),
@@ -44,6 +44,11 @@ var argv = optimist.usage('\nAres IDE, a front-end designer/editor web applicati
 		alias : 'host',
 		description: 'host to bind the express server onto',
 		default: '127.0.0.1'
+	})
+	.options('a', {
+		alias : 'listen_all',
+		description: 'When set, listen to all adresses. By default, listen to the address specified with -H',
+		'boolean': true
 	})
 	.options('c', {
 		alias : 'config',
@@ -316,19 +321,22 @@ app.configure(function(){
 	app.use(express.logger('dev'));
 
 	app.get('/', function(req, res, next) {
+		log("GET /");
 		res.redirect('/ide/ares/');
 	});
 	app.get('/res/timestamp', function(req, res, next) {
 		res.status(200).json({timestamp: ide.res.timestamp});
 	});
 	app.get('/res/services', function(req, res, next) {
+		log("GET /res/services:", ide.res.services);
 		res.status(200).json({services: ide.res.services});
 	});
 	app.all('/res/services/:serviceId/*', proxyServices);
 	app.all('/res/services/:serviceId', proxyServices);
 
 });
-app.listen(port, addr);
+
+app.listen(port, argv.listen_all ? null : addr);
 
 // Run non-regression test suite
 

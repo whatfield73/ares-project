@@ -1,28 +1,24 @@
 enyo.kind({
 	name: "HermesFileSystem",
-	kind: "enyo.Object",
+	kind: "enyo.Component",
 	debug: false,
 	events: {
 		onLoginFailed: ""
 	},
 	create: function() {
+		if (this.debug) this.log();
 		this.inherited(arguments);
-		this.auth = undefined;
+		this.config = {};
 	},
 	isOk: function() {
 		return !!this.config.origin;
 	},
 	setConfig: function(inConfig) {
-		if (this.debug) this.log(inConfig);
-		this.config = inConfig;
-		this.authorize(inConfig.auth, enyo.bind(this, function(inError, inValue) {
-			this.log("error:", inError, ", value:", inValue);
-			if (inError) {
-				this.doLoginFailed(inConfig);
-			} else {
-				this.auth = inConfig.auth;
-			}
-		}));
+		var self = this;
+
+		if (this.debug) this.log("config:", this.config, "+", inConfig);
+		this.config = ares.extend(this.config, inConfig);
+		if (this.debug) this.log("=> config:", this.config);
 	},
 	getConfig: function() {
 		return this.config;
@@ -51,7 +47,8 @@ enyo.kind({
 			url: url,
 			method: method,
 			handleAs: this._requestDic[inMethod].handleAs,
-			postBody: inParams && inParams.postBody
+			postBody: inParams && inParams.postBody,
+			contentType: inParams && inParams.contentType
 		};
 		var req = new enyo.Ajax(options);
 		if (inParams && inParams.postBody) {
@@ -119,6 +116,7 @@ enyo.kind({
 		}
 		function _authFailure(inXhr, inError) {
 			if (this.debug) this.log("authFailure(): inError:", inError, ", body:", (inXhr.xhrResponse ? inXhr.xhrResponse.body : undefined));
+			self.doLoginFailed({id: this.config.id});
 			next(new Error(inError));
 		}
 	},
@@ -142,12 +140,19 @@ enyo.kind({
 			});
 	},
 	putFile: function(inFileId, inContent) {
-		var formData = new enyo.FormData(),
-		    file = new enyo.Blob([inContent || ''], {type: "application/octet-stream"});
+		var formData = new enyo.FormData() ;
+		var file = new enyo.Blob([inContent || ''], {type: "application/octet-stream"});
 		if (this.debug) this.log("file:", file);
 		// ['/path','.'] resolves to '/path', so using '.'
 		// keeps the file name encoded in inFileId
 		formData.append('file', file, '.' /*filename*/);
+		return this._request("PUT", inFileId, {postBody: formData} /*inParams*/);
+	},
+	createFile: function(inFolderId, inName, inContent) {
+		var formData = new enyo.FormData() ;
+		var file = new enyo.Blob([inContent || ''], {type: "application/octet-stream"});
+		if (this.debug) this.log("file:", file, "filename:", inName);
+		formData.append('file', file, inName /*filename*/);
 		if (enyo.platform.firefox) {
 			// FormData#append() lacks the third parameter
 			// 'filename', so emulate it using a list of
@@ -156,16 +161,12 @@ enyo.kind({
 			// other end of the tip is implemented on
 			// server-side.
 			// http://stackoverflow.com/questions/6664967/how-to-give-a-blob-uploaded-as-formdata-a-file-name
-			formData.append('filename', '.');
+			formData.append('filename', inName );
 		}
-		return this._request("PUT", inFileId, {postBody: formData} /*inParams*/);
-	},
-	createFile: function(inFolderId, inName, inContent) {
-		var formData = new enyo.FormData(),
-		    file = new enyo.Blob([inContent || ''], {type: "application/octet-stream"});
-		if (this.debug) this.log("file:", file, "filename:", inName);
-		formData.append('file', file, inName /*filename*/);
 		return this._request("PUT", inFolderId, {postBody: formData} /*inParams*/);
+	},
+	createFiles: function(inFolderId, inData) {
+		return this._request("PUT", inFolderId, {postBody: inData.content, contentType: inData.ctype} /*inParams*/);
 	},
 	createFolder: function(inFolderId, inName) {
 		var newFolder = inFolderId + "/" + inName;
