@@ -1,7 +1,4 @@
-// -*- javascript -*-
-
 {
-	"name":"project",
 	"description":"JSON Schema of Ares Project File (project.json)",
 	"type": "object",
 	"properties": {
@@ -131,6 +128,10 @@
 									"description":"android-specific build properties",
 									"required":false,
 									"properties":{
+										"keyId": {
+											"type": "integer",
+											"description": "PhoneGap Build Key ID, as give by /api/v1/keys/android"
+										},
 										"minVersion":{
 											"type":"string",
 											"description":"minimum Android version required by this application.",
@@ -143,6 +144,10 @@
 									"description":"ios-specific build properties",
 									"required":false,
 									"properties":{
+										"keyId": {
+											"type": "integer",
+											"description": "PhoneGap Build Key ID, as give by /api/v1/keys/ios"
+										}
 									}
 								},
 								"winphone":{
@@ -157,6 +162,10 @@
 									"description":"blackberry-specific build properties",
 									"required":false,
 									"properties":{
+										"keyId": {
+											"type": "integer",
+											"description": "PhoneGap Build Key ID, as give by /api/v1/keys/blackberry"
+										}
 									}
 								},
 								"webos":{

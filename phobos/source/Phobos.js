@@ -1,3 +1,4 @@
+/*global alert, Documentor, ProjectCtrl */
 enyo.kind({
 	name: "Phobos",
 	classes: "enyo-unselectable",
@@ -12,6 +13,7 @@ enyo.kind({
 				{name: "saveButton", kind: "onyx.Button", content: $L("Save"), ontap: "saveDocAction"},
 				{name: "newKindButton", kind: "onyx.Button", Showing: "false", content: $L("New Kind"), ontap: "newKindAction"},
 				{fit: true},
+				{name: "editorButton", kind: "onyx.Button", content: "Editor Settings", ontap: "editorSettings"},
 				{name: "designerButton", kind: "onyx.Button", content: $L("Designer"), ontap: "designerAction"}
 			]},
 			{name: "body", fit: true, kind: "FittableColumns", Xstyle: "padding-bottom: 10px;", components: [
@@ -31,7 +33,9 @@ enyo.kind({
 		{name: "savePopup", kind: "Ares.ActionPopup", onAbandonDocAction: "abandonDocAction"},
 		{name: "autocomplete", kind: "Phobos.AutoComplete"},
 		{name: "errorPopup", kind: "Ares.ErrorPopup", msg: "unknown error"},
-		{name: "findpop", kind: "FindPopup", centered: true, modal: true, floating: true, onFindNext: "findNext", onFindPrevious: "findPrevious", onReplace: "replace", onReplaceAll:"replaceAll", onHide: "focusEditor"}
+		{name: "findpop", kind: "FindPopup", centered: true, modal: true, floating: true, onFindNext: "findNext", onFindPrevious: "findPrevious", onReplace: "replace", onReplaceAll:"replaceAll", onHide: "focusEditor", onClose: "findClose"},
+		{name: "editorSettingsPopup", kind: "EditorSettings", classes: "ares_phobos_settingspop", centered: true, modal: true, floating: true,
+		onChangeTheme: "changeTheme", onChangeHighLight: "changeHighLight", onClose: "closeEditorPop", onWordWrap: "changeWordWrap", onFontsizeChange: "changeFont", onTabSizsChange: "tabSize"}
 	],
 	events: {
 		onSaveDocument: "",
@@ -106,6 +110,27 @@ enyo.kind({
 			// Pass to the autocomplete compononent a reference to ace
 			this.$.autocomplete.setAce(this.$.ace);
 			this.focusEditor();
+
+			/* set editor to user pref */
+			this.$.ace.editingMode = mode;
+			this.$.ace.highlightActiveLine = localStorage.highlight;
+			if(!this.$.ace.highlightActiveLine || this.$.ace.highlightActiveLine.indexOf("false") != -1){
+				this.$.ace.highlightActiveLine = false;
+			}
+			this.$.ace.highlightActiveLineChanged();
+			this.$.ace.wordWrap = localStorage.wordwrap;
+
+			if(!this.$.ace.wordwrap || this.$.ace.wordWrap.indexOf("false") != -1){
+				this.$.ace.wordWrap = false;
+			}
+			this.$.ace.wordWrapChanged();
+
+			this.fSize = localStorage.fontsize;
+			if(this.fSize ===  undefined){
+				this.fSize = "11px";
+			}
+
+			this.$.ace.setFontSize(this.fSize);
 		}
 		else {
 			var origin = this.projectData.getService().getConfig().origin;
@@ -130,7 +155,7 @@ enyo.kind({
 		};
 
 		var showSettings = showModes[mode]||showModes['text'];
-		for (stuff in showSettings) {
+		for (var stuff in showSettings) {
 			this.$[stuff].setShowing( showSettings[stuff] ) ;
 		}
 
@@ -290,6 +315,19 @@ enyo.kind({
 		return -1;
 	},
 	designerAction: function() {
+		var isDesignProperty={
+			layoutKind: true,
+			attributes: true,
+			classes: true,
+			content: true,
+			controlClasses: true,
+			defaultKind: true,
+			fit: true,
+			src: true,
+			style: true,
+			tag: true,
+			name: true,
+		}
 		var c = this.$.ace.getValue();
 		this.reparseAction();
 		if (this.analysis) {
@@ -301,15 +339,27 @@ enyo.kind({
 			var data = {kinds: kinds, projectData: this.projectData, fileIndexer: this.analysis};
 			for (var i=0; i < this.analysis.objects.length; i++) {
 				var o = this.analysis.objects[i];
-				var comps = o.components;
-				var name = o.name;
-				var kind = o.superkind;
-				if (comps) { // only include kinds with components block
+				if (o.componentsBlockStart && o.componentsBlockEnd) { // only include kinds with components block
 					var start = o.componentsBlockStart;
 					var end = o.componentsBlockEnd;
+					var name = o.name;
+					var kind = o.superkind;
 					var js = c.substring(start, end);
-					var o = eval("(" + js + ")"); // Why eval? Because JSON.parse doesn't support unquoted keys...
-					kinds.push({name: name, kind: kind, components: o});
+					var comps = eval("(" + js + ")"); // Why eval? Because JSON.parse doesn't support unquoted keys...
+					var comp = {
+						name: name,
+						kind: kind,
+						components: comps
+					}
+					for (var j=0; j < o.properties.length; j++) {
+						var prop = o.properties[j];
+						var pName = prop.name;
+						if (isDesignProperty[pName]) {
+							var value = Documentor.stripQuotes(prop.value[0].name);
+							comp[pName] = value;
+						}
+					}
+					kinds.push(comp);
 				}
 			}
 			if (kinds.length > 0) {
@@ -426,7 +476,7 @@ enyo.kind({
 		// Prepare the code to insert
 		var codeToInsert = "";
 		for(var item in declared) {
-			if (existing[item] === undefined) {
+			if (item !== "" && existing[item] === undefined) {
 				codeToInsert += (commaTerminated ? "" : ",\n");
 				commaTerminated = false;
 				codeToInsert += ("    " + item + ": function(inSender, inEvent) {\n        // TO");
@@ -561,12 +611,12 @@ enyo.kind({
 	replaceAll: function(){
 		this.$.ace.replaceAll(this.$.findpop.findValue , this.$.findpop.replaceValue);
 	},
-	
+
 	//ACE replace doesn't replace the currently-selected match. It instead replaces the *next* match. Seems less-than-useful
 	replace: function(){
 		//this.$.ace.replace(this.$.findpop.findValue , this.$.findpop.replaceValue);
 	},
-	
+
 	focusEditor: function(inSender, inEvent) {
 		this.$.ace.focus();
 	},
@@ -575,6 +625,42 @@ enyo.kind({
 	},
 	handleScroll: function(inSender, inEvent) {
 		this.$.autocomplete.hide();
+	},
+
+	findClose: function(){
+		this.$.findpop.hide();
+	},
+	/*  editor setting */
+
+	editorSettings: function() {
+		this.$.editorSettingsPopup.show();
+	},
+
+	closeEditorPop: function(){
+		this.$.editorSettingsPopup.hide();
+	},
+
+	changeHighLight: function(){
+		this.$.ace.highlightActiveLine = this.$.editorSettingsPopup.highlight;
+		this.$.ace.highlightActiveLineChanged();
+	},
+	changeTheme: function() {
+		this.$.ace.theme = this.$.editorSettingsPopup.theme;
+		this.$.ace.themeChanged();
+	},
+	changeWordWrap: function() {
+		this.$.ace.wordWrap = this.$.editorSettingsPopup.wordWrap;
+		this.$.ace.wordWrapChanged();
+	},
+	changeFont: function(){
+		var fs = this.$.editorSettingsPopup.fSize;
+			this.$.ace.setFontSize(fs);
+	},
+
+	tabSize: function() {
+		var ts = this.$.ace.editorSettingsPopup.Tsize;
+		this.log("ts",ts);
+		this.$.ace.setTabSize(ts);
 	}
 });
 

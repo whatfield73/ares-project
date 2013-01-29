@@ -22,7 +22,7 @@ enyo.kind({
 	components: [
 		{kind: "onyx.RadioGroup", onActivate: "switchDrawers", name: "thumbnail", components: [
 			{content: "Project", active: true, attributes: {title: 'project attributes...'}},
-			{content: "PhoneGap", attributes: {title: 'phonegap build parameters...'}},
+			{content: "PhoneGap", name: "phonegapTab", attributes: {title: 'phonegap build parameters...'}, showing: false},
 			{content: "Preview", attributes: {title: 'project preview parameters...'}}
 		]},
 		{name: "projectDrawer", kind: "onyx.Drawer", open:true, components: [
@@ -78,49 +78,26 @@ enyo.kind({
 					 {tag: "td", content: "Directory: "},
 					 {tag: 'td', attributes: {colspan: 3}, content: "", name: "projectDirectory" }
 				]}
+			]},
+			{kind: "enyo.FittableColumns", components: [
+				{components: [
+					{tag: "span", content: "PhoneGap Build:"},
+					{name: "phonegapCheckBox", kind: "onyx.Checkbox", onchange: "togglePhoneGap"}
+				]}
+			]},
+			{kind: "enyo.FittableColumns", components: [
+				{kind: "Control", content: "Template:"},
+				{kind: "onyx.PickerDecorator", fit: true, components: [
+					{name: "templateButton", kind: "onyx.PickerButton", fit: true},
+					{kind: "onyx.FlyweightPicker", name: "templatePicker", components: [
+						{name: "template"}
+					], onSetupItem: "templateSetupItem", onSelect: "templateSelected"}
+				]}
 			]}
 		]},
 
 		{name: "phonegapDrawer", kind: "onyx.Drawer", open: false, components: [
-			{
-				kind: "onyx.ToggleButton",
-				name: 'pgConfEnabled',
-				onContent: "enabled",
-				offContent: "disabled",
-				style: "margin-top: 10px;"
-			},
-			{tag: 'table', components: [
-				{tag: "tr" , components: [
-					 {tag: "td" , content: "AppId: "},
-					 {tag: 'td', attributes: {colspan: 1}, components:[
-						  {kind: "onyx.InputDecorator", components: [
-							   {kind: "Input", name: "pgConfId", placeholder: "com.example.myapp",
-								attributes: {title: "unique identifier, assigned by build.phonegap.com"}
-							   }
-						   ]}
-					 ]},
-					 {tag: "td" , content: "Icon URL: "},
-					 {tag: 'td', attributes: {colspan: 2}, components:[
-						  {kind: "onyx.InputDecorator", components: [
-							   {kind: "Input", name: "pgIconUrl",
-								attributes: {title: "Relative location of the application icon. Defaults to Enyo icon."}
-							   }
-						   ]}
-					 ]}
-				]}
-			]},
-			{content: "Targets:"},
-			{
-				kind: "FittableRows",
-				onActivate: "enablePhoneGap",
-				components: [
-					{content: "Android", classes: "ares_projectview_label"}, {kind: "onyx.Checkbox", classes: "ares_projectview_check", name: 'androidTarget'},
-					{content: "iOS", classes: "ares_projectview_label"}, {kind: "onyx.Checkbox", classes: "ares_projectview_check", name: 'iosTarget'},
-					{content: "WinPhone", classes: "ares_projectview_label"}, {kind: "onyx.Checkbox", classes: "ares_projectview_check", name: 'winphoneTarget'},
-					{content: "Blackberry", classes: "ares_projectview_label"}, {kind: "onyx.Checkbox", classes: "ares_projectview_check", name: 'blackberryTarget'},
-					{content: "WebOS", classes: "ares_projectview_label"}, {kind: "onyx.Checkbox", classes: "ares_projectview_check", name: 'webosTarget'}
-				]
-			}
+			{kind: "PhoneGap.ProjectProperties", name: "phonegap"}
 		]},
 
 		{name: "previewDrawer", kind: "onyx.Drawer", open: false, components: [
@@ -148,7 +125,9 @@ enyo.kind({
 	],
 
 	debug: false,
-
+	templates: [],
+	TEMPLATE_NONE: "NONE",
+	selectedTemplate: undefined,
 	/**
 	 * Tune the widget for project creation
 	 */
@@ -178,17 +157,14 @@ enyo.kind({
 
 			status[inEvent.originator.getContent().toLowerCase()] = true ;
 
-			for (drawer in status) {
+			for (var drawer in status) {
 				this.$[drawer + 'Drawer'].setOpen(status[drawer]) ;
 			}
 		}
 	},
 
-	// switch Phonegap to "enabled" whenever user validates a target
-	enablePhoneGap: function(inSender, inEvent) {
-		if (inEvent.originator.getValue() === true ) {
-			this.$.pgConfEnabled.setValue(true) ;
-		}
+	togglePhoneGap: function(inSender, inEvent) {
+		this.$.phonegapTab.setShowing(inEvent.originator.checked);
 	},
 
 	/**
@@ -198,8 +174,6 @@ enyo.kind({
 	 */
 	preFill: function(inData) {
 		this.config = typeof inData === 'object' ? inData : JSON.parse(inData) ;
-		var pgConf ;
-		var pgTarget ;
 		var conf = this.config ;
 		var confDefault = ProjectConfig.PREFILLED_CONFIG_FOR_UI ;
 
@@ -213,28 +187,18 @@ enyo.kind({
 		this.$.projectAuthor. setValue(conf.author.name || '') ;
 		this.$.projectContact.setValue(conf.author.href || '') ;
 
-		if (! conf.build) {conf.build = {} ;}
-		if (! conf.build.phonegap) { conf.build.phonegap = {}; }
-
-		pgConf = this.config.build.phonegap ;
-		this.$.pgConfEnabled.setValue(pgConf.enabled);
-		this.$.pgConfId.setValue(pgConf.appId || '' );
-		this.$.pgIconUrl.setValue(pgConf.icon.src || confDefault.icon.src );
-
-		if (! pgConf.targets) { pgConf.targets = {} ;}
-		// pgTarget is a key of object pgConf.targets
-		for (pgTarget in pgConf.targets ) {
-			this.$[ pgTarget + 'Target' ].setValue(pgConf.targets[pgTarget]) ;
-		}
+		this.$.phonegapTab.setShowing(conf.build.phonegap.enabled);
+		this.$.phonegapCheckBox.setChecked(conf.build.phonegap.enabled);
+		this.$.phonegap.setProjectConfig(this.config.build.phonegap);
 
 		if (! conf.preview ) {conf.preview = {} ;}
-		this.$.ppTopFile.setValue( conf.preview['top_file'] || confDefault.preview['top-file'] ) ;
+		this.$.ppTopFile.setValue(conf.preview.top_file);
 
 		return this ;
 	},
 
 	confirmTap: function(inSender, inEvent) {
-		var pgConf, tglist, ppConf ;
+		var tglist, ppConf ;
 		// retrieve modified values
 		this.log('ok tapped') ;
 
@@ -246,24 +210,14 @@ enyo.kind({
 		this.config.author.name = this.$.projectAuthor.getValue();
 		this.config.author.href = this.$.projectContact.getValue();
 
-		this.config.build.enabled = this.$.pgConfEnabled.getValue();
-		this.config.build.appId   = this.$.pgConfId.getValue();
-
-
-		pgConf = this.config.build.phonegap ;
-		pgConf.icon.src = this.$.pgIconUrl.getValue();
-
-		tglist = ['android','ios','winphone','blackberry','webos'] ;
-		for ( i in tglist) {
-			this.log('copy data from ' + tglist[i] +'Target') ;
-			pgConf.targets[tglist[i]] = this.$[ tglist[i] + 'Target' ].getValue() ;
-		}
+		this.config.build.phonegap = this.$.phonegap.getProjectConfig();
+		this.config.build.phonegap.enabled = this.$.phonegapCheckBox.checked;
 
 		ppConf = this.config.preview ;
-		ppConf['top_file'] = this.$.ppTopFile.getValue();
+		ppConf.top_file = this.$.ppTopFile.getValue();
 
 		// to be handled by a ProjectWizard
-		this.doModifiedConfig({data: this.config}) ;
+		this.doModifiedConfig({data: this.config, template: this.selectedTemplate}) ;
 
 		this.doDone();
 
@@ -273,6 +227,26 @@ enyo.kind({
 
 		// handled here (don't bubble)
 		return true;
+	},
+	setTemplateList: function(templates) {
+		this.$.templateButton.applyStyle("width", "20em");
+		this.templates = [this.TEMPLATE_NONE];
+		enyo.forEach(templates, function(item) {
+			this.templates.push(item.id);
+		}, this);
+		this.$.templatePicker.setCount(this.templates.length);
+		this.$.templatePicker.setSelected(0);
+		this.selectedTemplate = undefined;
+	},
+	templateSetupItem: function(inSender, inEvent) {
+		this.$.template.setContent(this.templates[inEvent.index]);
+		return true;
+	},
+	templateSelected: function(inSender, inEvent) {
+		if (inEvent.content === this.TEMPLATE_NONE) {
+			this.selectedTemplate = undefined;
+		} else {
+			this.selectedTemplate = inEvent.content;
+		}
 	}
 });
-

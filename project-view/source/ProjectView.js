@@ -31,7 +31,8 @@ enyo.kind({
 		onPhonegapBuild: "startPhonegapBuild",
 		onBuildStarted: "phonegapBuildStarted",
 		onPreview: "launchPreview",
-		onError: "showError"
+		onError: "showError",
+		onShowWaitPopup: "handleShowWaitPopup"
 	},
 	create: function() {
 		this.inherited(arguments);
@@ -61,6 +62,7 @@ enyo.kind({
 	},
 
 	addProjectInList: function(inSender, inEvent) {
+		this.hideWaitPopup();
 		try {
 			// Add an entry into the project list
 			this.$.projectList.addProject(inEvent.name, inEvent.folderId, inEvent.service);
@@ -96,6 +98,9 @@ enyo.kind({
 	},
 	projectRemoved: function(inSender, inEvent) {
 		this.$.harmonia.setProject(null);
+	},
+	handleShowWaitPopup: function(inSender, inEvent) {
+		this.showWaitPopup(inEvent.msg);
 	},
 	showWaitPopup: function(inMessage) {
 		this.$.waitPopupMessage.setContent(inMessage);
@@ -142,10 +147,20 @@ enyo.kind({
 		if ( this.currentProject) {
 			var config = this.currentProject.getConfig() ;
 			var topFile = config.data.preview.top_file ;
+			var projectUrl = this.currentProject.getProjectUrl() + '/' + topFile ;
+
+			// the last replace method is needed for test environment only
+			var winLoc = window.location.toString().replace('ares','preview').replace('test', 'index') ;
+			var previewUrl = winLoc
+				+ ( winLoc.indexOf('?') != -1 ? '&' : '?' )
+				+ 'url=' + encodeURIComponent(projectUrl);
+
+			this.log("preview on URL " + previewUrl) ;
+
 			window.open(
-				this.currentProject.getProjectUrl() + '/' + topFile ,
-				null, // ensure that a new window is created each time preview is tapped
-				'scrollbars=auto, titlebar=yes, height=' + inEvent.height + ',width=' + inEvent.width,
+				previewUrl,
+				'_blank', // ensure that a new window is created each time preview is tapped
+				'scrollbars=0,menubar=1',
 				false
 			);
 		}
