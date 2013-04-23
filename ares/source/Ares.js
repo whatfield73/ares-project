@@ -3,17 +3,18 @@ enyo.kind({
 	kind: "Control",
 	classes: "onyx",
 	fit: true,
+	debug: false,
 	components: [
 		{kind: "Panels", arrangerKind: "CarouselArranger", draggable: false, classes:"enyo-fit ares-panels", components: [
 			{components: [
-				{kind: "Phobos", onSaveDocument: "saveDocument", onCloseDocument: "closeDocument", onDesignDocument: "designDocument"}
+				{kind: "Phobos", onSaveDocument: "saveDocument", onSaveAsDocument: "saveAsDocument", onCloseDocument: "closeDocument", onDesignDocument: "designDocument", onUpdate: "phobosUpdate"}
 			]},
 			{components: [
-				{kind: "Deimos", onCloseDesigner: "closeDesigner", onDesignerUpdate: "designerUpdate"}
+				{kind: "Deimos", onCloseDesigner: "closeDesigner", onDesignerUpdate: "designerUpdate", onUndo: "designerUndo", onRedo: "designerRedo"}
 			]}
 		]},
 		{kind: "Slideable", layoutKind: "FittableRowsLayout", classes: "onyx ares-files-slider", axis: "v", value: 0, min: -500, max: 0, unit: "px", onAnimateFinish: "finishedSliding", components: [
-			{kind: "ProjectView", fit: true, classes: "onyx", onFileDblClick: "doubleclickFile"},
+			{name: "projectView", kind: "ProjectView", fit: true, classes: "onyx", onFileDblClick: "openDocument", onProjectSelected: "projectSelected"},
 			{name: "bottomBar", kind: "DocumentToolbar",
 				onToggleOpen: "toggleFiles",
 				onSwitchFile: "switchFile",
@@ -23,11 +24,22 @@ enyo.kind({
 				onClose: "bounceClose"
 			}
 		]},
-		{kind: "ServiceRegistry"}
+		{name: "waitPopup", kind: "onyx.Popup", centered: true, floating: true, autoDismiss: false, modal: true, style: "text-align: center; padding: 20px;", components: [
+			{kind: "Image", src: "$phobos/assets/images/save-spinner.gif", style: "width: 54px; height: 55px;"},
+			{name: "waitPopupMessage", content: "Ongoing...", style: "padding-top: 10px;"}
+		]},
+		{name: "errorPopup", kind: "Ares.ErrorPopup", msg: "unknown error", details: ""},
+		{kind: "ServiceRegistry"},
+		{kind: "Ares.PackageMunger", name: "packageMunger"}
 	],
 	handlers: {
 		onReloadServices: "handleReloadServices",
-		onUpdateAuth: "handleUpdateAuth"
+		onUpdateAuth: "handleUpdateAuth",
+		onShowWaitPopup: "showWaitPopup",
+		onHideWaitPopup: "hideWaitPopup",
+		onError: "showError",
+		onTreeChanged: "_treeChanged",
+		onChangingNode: "_nodeChanging"
 	},
 	phobosViewIndex: 0,
 	deimosViewIndex: 1,
@@ -39,14 +51,12 @@ enyo.kind({
 		window.onbeforeunload = enyo.bind(this, "handleBeforeUnload");
 		if (Ares.TestController) {
 			Ares.Workspace.loadProjects("com.enyojs.ares.tests", true);
-			if (window.location.search.indexOf("norunner") == -1) {
-				// in charge of Ares Test Suite
-				this.createComponent({kind: "Ares.TestController", aresObj: this});
-			}
+			this.createComponent({kind: "Ares.TestController", aresObj: this});
 		} else {
 			Ares.Workspace.loadProjects();
 		}
 		this.calcSlideableLimit();
+		Ares.instance = this;
 	},
 	rendered: function() {
 		this.inherited(arguments);
@@ -67,66 +77,173 @@ enyo.kind({
 		if (this.debug) this.log("sender:", inSender, ", event:", inEvent);
 		this.$.serviceRegistry.setConfig(inEvent.serviceId, {auth: inEvent.auth}, inEvent.next);
 	},
-	doubleclickFile: function(inSender, inEvent) {
-		var f = inEvent.file;
-		var id = Ares.Workspace.files.computeId(f);
-		var d = Ares.Workspace.files.get(id);
-		if (d) {
-			this.switchToDocument(d);
-		} else {
-			this.$.bottomBar.createFileTab(f.name, id);
-			this.$.slideable.setDraggable(true);
-			this.openDocument(inSender, inEvent);
-		}
+	projectSelected: function() {
+		setTimeout(enyo.bind(this, function() { this.$.deimos.projectSelected(this.$.projectView.currentProject); }), 500);	// <-- TODO - using timeout here because project url is set asynchronously
+		return true;
 	},
 	openDocument: function(inSender, inEvent) {
-		var f = inEvent.file;
-		var projectData = inEvent.projectData;
-		var service = projectData.getService();
-		this.$.phobos.beginOpenDoc();
-		service.getFile(f.id)
-			.response(this, function(inEvent, inData) {
-				if (inData.content) {
-					inData=inData.content;
+		this._openDocument(inEvent.projectData, inEvent.file, function(inErr) {});
+	},
+	/** @private */
+	_openDocument: function(projectData, file, next) {
+		var self = this;
+		var fileDataId = Ares.Workspace.files.computeId(file);
+		var fileData = Ares.Workspace.files.get(fileDataId);
+		if (fileData) {
+			this.switchToDocument(fileData);
+		} else {
+			this.showWaitPopup(this, {msg: $L("Opening...")});
+			this.$.bottomBar.createFileTab(file.name, fileDataId);
+			this.$.slideable.setDraggable(true);
+			this._fetchDocument(projectData, file, function(inErr, inContent) {
+				self.hideWaitPopup();
+				if (inErr) {
+					self.warn("Open failed", inErr);
+					if (typeof next === 'function') next(inErr);
 				} else {
-					// no data? Empty file
-					inData="";
+					fileData = Ares.Workspace.files.newEntry(file, inContent, projectData);
+					self.switchToDocument(fileData);
+					if (typeof next === 'function') next();
 				}
-				var id = Ares.Workspace.files.computeId(f);
-				if (Ares.Workspace.files.get(id)) {
-					alert("Duplicate File ID in cache!");
-				}
-				var doc = Ares.Workspace.files.newEntry(f, inData, projectData);
-				this.switchToDocument(doc);
+			});
+		}
+	},
+	/** @private */
+	_fetchDocument: function(projectData, file, next) {
+		if (this.debug) this.log("projectData:", projectData, ", file:", file);
+		var service = projectData.getService();
+		service.getFile(file.id)
+			.response(this, function(inEvent, inData) {
+				next(null, inData && inData.content || "");
 			})
-			.error(this, function(inEvent, inData) {
-				enyo.log("Open failed", inData);
-				this.$.phobos.hideWaitPopup();
+			.error(this, function(inEvent, inErr) {
+				next(inErr);
 			});
 	},
 	saveDocument: function(inSender, inEvent) {
-		var service = inEvent.file.service;
-		service.putFile(inEvent.file.id, inEvent.content)
-			.response(this, function(inEvent, inData) {
-				inSender.saveComplete();
-				this.$.deimos.saveComplete();
-			})
-			.error(this, function(inEvent, inData) {
-				inSender.saveFailed(inData);
-			});
+		if (this.debug) this.log("sender:", inSender, ", event:", inEvent);
+		var self = this;
+		this._saveDocument(inEvent.content, {service: inEvent.file.service, fileId: inEvent.file.id}, function(err) {
+			if (err) {
+				self.$.phobos.saveFailed(err);
+			} else {
+				self.$.phobos.saveComplete();
+				self.$.deimos.saveComplete();
+			}
+		});
+	},
+	_saveDocument: function(content, where, next) {
+		var req;
+		if (where.fileId) {
+			req = where.service.putFile(where.fileId, content);
+		} else {
+			req = where.service.createFile(where.folderId, where.name, content);
+		}
+		req.response(this, function(inEvent, inData) {
+			next(null, inData);
+		}).error(this, function(inEvent, inErr) {
+			next(inErr);
+		});
+
+	},
+	saveAsDocument: function(inSender, inEvent) {
+		if (this.debug) this.log("sender:", inSender, ", event:", inEvent);
+		var self = this,
+		    file = inEvent.file,
+		    name = inEvent.name,
+		    content = inEvent.content;
+
+		if (!file) {
+			_footer(new Error("Internal error: missing file/folder description"));
+			return;
+		}
+
+		async.waterfall([
+			this._closeDocument.bind(this, inEvent.docId),
+			_prepareNewLocation.bind(this),
+			this._saveDocument.bind(this, inEvent.content),
+			_savedToOpen.bind(this),
+			this._openDocument.bind(this, inEvent.projectData)
+		], _footer);
+
+		function _prepareNewLocation(next) {
+			var where, err;
+			if (file.isDir && name) {
+				// create given file in given dir
+				where = {
+					service: file.service,
+					folderId: file.id,
+					name: name
+				};
+			} else if (!file.isDir && !name) {
+				// overwrite the given file
+				where = {
+					service: file.service,
+					fileId: file.id
+				};
+			} else if (!file.isDir && name) {
+				// create a new file in the same folder as the
+				// given file
+				where = {
+					service: file.service,
+					folderId: file.parent.id,
+					name: name
+				};
+			} else {
+				err = new Error("Internal error: wrong file/folder description");
+			}
+			next(err, where);
+		}
+
+		function _savedToOpen(inData, next) {
+			this.$.projectView.refreshFile(file);
+			// FIXME: only HermesFileTree report built-in file#service
+			var hermesFile = inData[0];
+			hermesFile.service = file.service;
+			hermesFile.name = ares.basename(hermesFile.path);
+			next(null, hermesFile);
+		}
+
+		function _footer(err, result) {
+			if (self.debug) enyo.log("err:", err, "result:", result);
+			if (typeof inEvent.next === 'function') {
+				inEvent.next(err, result);
+			}
+		}
 	},
 	closeDocument: function(inSender, inEvent) {
-		// remove file from cache
-		Ares.Workspace.files.removeEntry(inEvent.id);
-		this.$.bottomBar.removeTab(inEvent.id);
-		this.$.slideable.setDraggable(Ares.Workspace.files.length > 0);
-		this.showFiles();
+		if (this.debug) this.log("sender:", inSender, ", event:", inEvent);
+		var self = this;
+		this._closeDocument(inEvent.id, function() {
+			self.showFiles();
+		});
+	},
+	/** @private */
+	_closeDocument: function(docId, next) {
+		if (docId) {
+			// remove file from cache
+			Ares.Workspace.files.removeEntry(docId);
+			this.$.bottomBar.removeTab(docId);
+			this.$.slideable.setDraggable(Ares.Workspace.files.length > 0);
+		}
+		if (typeof next === 'function') next();
 	},
 	designDocument: function(inSender, inEvent) {
+		this.syncEditedFiles();
 		this.$.deimos.load(inEvent);
 		this.$.panels.setIndex(this.deimosViewIndex);
 		this.adjustBarMode();
 		this.activeDocument.setCurrentIF('designer');
+	},
+	//* A code change happened in Phobos - push change to Deimos
+	phobosUpdate: function(inSender, inEvent) {
+		this.$.deimos.load(inEvent);
+	},
+	//* A design change happened in Deimos - push change to Phobos
+	designerUpdate: function(inSender, inEvent) {
+		if (inEvent && inEvent.docHasChanged) {
+			this.$.phobos.updateComponents(inSender, inEvent);
+		}
 	},
 	closeDesigner: function(inSender, inEvent) {
 		this.designerUpdate(inSender, inEvent);
@@ -134,10 +251,13 @@ enyo.kind({
 		this.adjustBarMode();
 		this.activeDocument.setCurrentIF('code');
 	},
-	designerUpdate: function(inSender, inEvent) {
-		if (inEvent && inEvent.docHasChanged) {
-			this.$.phobos.updateComponents(inSender, inEvent);
-		}
+	//* Undo event from Deimos
+	designerUndo: function(inSender, inEvent) {
+		this.$.phobos.undoAndUpdate();
+	},
+	//* Redo event from Deimos
+	designerRedo: function(inSender, inEvent) {
+		this.$.phobos.redoAndUpdate();
 	},
 	handleBeforeUnload: function() {
 		if (window.location.search.indexOf("debug") == -1) {
@@ -226,6 +346,83 @@ enyo.kind({
 		this.switchFile(inSender, inEvent);
 		enyo.asyncMethod(this.$.phobos, "closeDocAction");
 	},
+	//* Update code running in designer
+	syncEditedFiles: function() {
+		var files = Ares.Workspace.files,
+			model,
+			i;
+		
+		for(i=0;i<files.models.length;i++) {
+			model = files.models[i];
+			
+			if(model.getFile().name === "package.js") {
+				continue;
+			}
+
+			this.updateCode(files.get(model.id));
+		}
+	},
+	updateCode: function(inDoc) {
+		var filename = inDoc.getFile().path,
+			code = inDoc.getAceSession().getValue();
+
+		if(filename.slice(-4) === ".css") {
+			doc = inDoc;
+			this.syncCSSFile(filename, code);
+		} else if(filename.slice(-3) === ".js") {
+			this.syncJSFile(code);
+		}
+	},
+	syncCSSFile: function(inFilename, inCode) {
+		this.$.deimos.syncCSSFile(inFilename, inCode);
+	},
+	syncJSFile: function(inCode) {
+		this.$.deimos.syncJSFile(inCode);
+	},
+	showWaitPopup: function(inSender, inEvent) {
+		this.$.waitPopupMessage.setContent(inEvent.msg);
+		this.$.waitPopup.show();
+	},
+	hideWaitPopup: function() {
+		this.$.waitPopup.hide();
+	},
+	showError: function(inSender, inEvent) {
+		if (this.debug) this.log("event:", inEvent, "from sender:", inSender);
+		this.hideWaitPopup();
+		this.showErrorPopup(inEvent);
+		return true; //Stop event propagation
+	},
+	showErrorPopup : function(msg, details) {
+		this.$.errorPopup.raise(msg, details);
+	},
+	/**
+	 * Event handler for user-initiated file or folder changes
+	 * 
+	 * @private
+	 * @param {Object} inSender
+	 * @param {Object} inEvent as defined by calls to HermesFileTree#doTreeChanged
+	 */
+	_treeChanged: function(inSender, inEvent) {
+		if (this.debug) this.log("sender:", inSender, ", event:", inEvent);
+		this.$.packageMunger.changeNodes(inEvent, (function(err) {
+			if (err) {
+				this.warn(err);
+			}
+		}).bind(this));
+	},
+	/**
+	 * Event handler for system-initiated file or folder changes
+	 * 
+	 * @private
+	 * @param {Object} inSender
+	 * @param {Object} inEvent as defined by calls to Ares.PackageMunger#doChangingNode
+	 */
+	_nodeChanging: function(inSender, inEvent) {
+		if (this.debug) this.log("sender:", inSender, ", event:", inEvent);
+		var docId = Ares.Workspace.files.computeId(inEvent.node);
+		this._closeDocument(docId);
+	},
+
 	statics: {
 		isBrowserSupported: function() {
 			if (enyo.platform.ie && enyo.platform.ie <= 8) {
@@ -233,6 +430,7 @@ enyo.kind({
 			} else {
 				return true;
 			}
-		}
+		},
+		instance: null
 	}
 });

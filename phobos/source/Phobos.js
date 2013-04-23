@@ -3,14 +3,29 @@ enyo.kind({
 	name: "Phobos",
 	classes: "enyo-unselectable",
 	components: [
-		{kind: "Analyzer", name: "fileAnalyzer"},
 		{kind: "DragAvatar", components: [
 			{tag: "img", src: "$deimos/images/icon.png"}
 		]},
 		{kind: "FittableRows", classes: "enyo-fit", Xstyle: "padding: 10px;", components: [
 			{kind: "onyx.Toolbar", layoutKind: "FittableColumnsLayout", components: [
-				{name: "documentLabel", content: "Document"},
-				{name: "saveButton", kind: "onyx.Button", content: $L("Save"), ontap: "saveDocAction"},
+				{kind: "onyx.MenuDecorator", onSelect: "fileMenuItemSelected", components: [
+					{content: "File"},
+					{kind: "onyx.Menu", components: [
+						{name: "saveButton", value: "saveDocAction", components: [
+							{kind: "onyx.IconButton", src: "$phobos/assets/images/menu-icon-save.png"},
+							{content: $L("Save")}
+						]},
+						{name: "saveAsButton", value: "saveAsDocAction", components: [
+							{kind: "onyx.IconButton", src: "$phobos/assets/images/menu-icon-save.png"},
+							{content: $L("Save as...")}
+						]},
+						{classes: "onyx-menu-divider"},
+						{name: "closeButton", value: "closeDocAction", components: [
+							{kind: "onyx.IconButton", src: "$phobos/assets/images/menu-icon-stop.png"},
+							{content: $L("Close")}
+						]}
+					]}
+				]},
 				{name: "newKindButton", kind: "onyx.Button", Showing: "false", content: $L("New Kind"), ontap: "newKindAction"},
 				{fit: true},
 				{name: "editorButton", kind: "onyx.Button", content: "Editor Settings", ontap: "editorSettings"},
@@ -19,32 +34,36 @@ enyo.kind({
 			{name: "body", fit: true, kind: "FittableColumns", Xstyle: "padding-bottom: 10px;", components: [
 				{name: "middle", fit: true, classes: "panel", components: [
 					{classes: "border panel enyo-fit", style: "margin: 8px;", components: [
-						{kind: "Ace", classes: "enyo-fit", style: "margin: 4px;", onChange: "docChanged", onSave: "saveDocAction", onCursorChange: "cursorChanged", onAutoCompletion: "startAutoCompletion", onFind: "findpop", onScroll: "handleScroll"},
+						{kind: "Ace", classes: "enyo-fit", style: "margin: 4px;", onChange: "docChanged", onSave: "saveDocAction", onCursorChange: "cursorChanged", onAutoCompletion: "startAutoCompletion", onFind: "findpop", onScroll: "handleScroll", onWordwrap: "toggleww"},
 						{name: "imageViewer", kind: "enyo.Image"}
 					]}
 				]},
 				{name: "right", kind: "rightPanels", showing: false,	arrangerKind: "CardArranger"}
 			]}
 		]},
-		{name: "waitPopup", kind: "onyx.Popup", centered: true, floating: true, autoDismiss: false, modal: true, style: "text-align: center; padding: 20px;", components: [
-			{kind: "Image", src: "$phobos/images/save-spinner.gif", style: "width: 54px; height: 55px;"},
-			{name: "waitPopupMessage", content: "Saving document...", style: "padding-top: 10px;"}
-		]},
 		{name: "savePopup", kind: "Ares.ActionPopup", onAbandonDocAction: "abandonDocAction"},
+		{name: "saveAsPopup", kind: "Ares.FileChooser", showing: false, headerText: $L("Save as..."), folderChooser: false, onFileChosen: "saveAsFileChosen"},
 		{name: "autocomplete", kind: "Phobos.AutoComplete"},
 		{name: "errorPopup", kind: "Ares.ErrorPopup", msg: "unknown error"},
-		{name: "findpop", kind: "FindPopup", centered: true, modal: true, floating: true, onFindNext: "findNext", onFindPrevious: "findPrevious", onReplace: "replace", onReplaceAll:"replaceAll", onHide: "focusEditor", onClose: "findClose"},
+		{name: "findpop", kind: "FindPopup", centered: true, modal: true, floating: true, onFindNext: "findNext", onFindPrevious: "findPrevious", onReplace: "replace", onReplaceAll:"replaceAll", onHide: "focusEditor", onClose: "findClose", onReplaceFind: "replacefind"},
 		{name: "editorSettingsPopup", kind: "EditorSettings", classes: "ares_phobos_settingspop", centered: true, modal: true, floating: true,
 		onChangeTheme: "changeTheme", onChangeHighLight: "changeHighLight", onClose: "closeEditorPop", onWordWrap: "changeWordWrap", onFontsizeChange: "changeFont", onTabSizsChange: "tabSize"}
 	],
 	events: {
+		onShowWaitPopup: "",
+		onHideWaitPopup: "",
 		onSaveDocument: "",
+		onSaveAsDocument: "",
 		onDesignDocument: "",
-		onCloseDocument: ""
+		onCloseDocument: "",
+		onUpdate: ""
 	},
 	handlers: {
 		onCss: "newcssAction",
 		onReparseAsked: "reparseAction"
+	},
+	published: {
+		projectData: null
 	},
 	debug: false,
 	// Container of the code to analyze and of the analysis result
@@ -59,9 +78,16 @@ enyo.kind({
 			this.projectData.setProjectCtrl(this.projectCtrl);
 		}
 	},
-	//
+	fileMenuItemSelected: function(inSender, inEvent) {
+		if (this.debug) this.log("sender:", inSender, ", event:", inEvent);
+		if (typeof this[inEvent.selected.value] === 'function') {
+			this[inEvent.selected.value]();
+		} else {
+			this.warn("Unexpected event or missing function: event:", inEvent.selected.value);
+		}
+	},
 	saveDocAction: function() {
-		this.showWaitPopup("Saving document...");
+		this.showWaitPopup($L("Saving ..."));
 		this.doSaveDocument({content: this.$.ace.getValue(), file: this.docData.getFile()});
 	},
 	saveComplete: function() {
@@ -77,12 +103,43 @@ enyo.kind({
 		this.log("Save failed: " + inMsg);
 		this.showErrorPopup("Unable to save the file");
 	},
-	beginOpenDoc: function() {
-		this.showWaitPopup("Opening document...");
+	saveAsDocAction: function() {
+		var file = this.docData.getFile();
+		this.$.saveAsPopup.setSelectedName(file.name);
+		this.$.saveAsPopup.show();
+	},
+	saveAsFileChosen: function(inSender, inEvent) {
+		if (this.debug) this.log("sender:", inSender, ", event:", inEvent);
+
+		if (!inEvent.file) {
+			// no file or folder chosen
+			return;
+		}
+		var self = this;
+		this.showWaitPopup($L("Saving ..."));
+		this.doSaveAsDocument({
+			docId: this.docData.getId(),
+			projectData: this.projectData,
+			file: inEvent.file,
+			name: inEvent.name,
+			content: this.$.ace.getValue(),
+			next: function(err) {
+				self.hideWaitPopup();
+				if (typeof inEvent.next === 'function') {
+					inEvent.next();
+				}
+			}
+		});
 	},
 	openDoc: function(inDocData) {
+		// If we are changing documents, reparse any changes into the current projectIndexer
+		if (this.docData && this.docData.getEdited()) {
+			this.reparseAction(true);
+		}
+
+		// Set up the new doucment
 		this.docData = inDocData;
-		this.projectData = this.docData.getProjectData();
+		this.setProjectData(this.docData.getProjectData());
 		this.getProjectController();
 		this.setAutoCompleteData();
 
@@ -93,9 +150,30 @@ enyo.kind({
 		var extension = file.name.split(".").pop();
 		this.hideWaitPopup();
 		this.analysis = null;
-		var mode = {json: "json", js: "javascript", html: "html", css: "css", jpg: "image", png: "image", gif: "image"}[extension] || "text";
+		var mode = {
+			json: "json",
+			design: "json",
+			js: "javascript",
+			html: "html",
+			css: "css",
+			coffee: "coffee",
+			dot: "dot",
+			patch: "diff",
+			diff: "diff",
+			jade: "jade",
+			less: "less",
+			md: "markdown",
+			markdown: "markdown",
+			svg: "svg",
+			xml: "xml",
+			jpeg: "image",
+			jpg: "image",
+			png: "image",
+			gif: "image"
+		}[extension] || "text";
 		this.docData.setMode(mode);
 		var hasAce = this.adjustPanelsForMode(mode);
+		
 		if (hasAce) {
 			var aceSession = this.docData.getAceSession();
 			if (aceSession) {
@@ -106,7 +184,7 @@ enyo.kind({
 				this.$.ace.setSession(aceSession);
 				this.docData.setAceSession(aceSession);
 			}
-
+			
 			// Pass to the autocomplete compononent a reference to ace
 			this.$.autocomplete.setAce(this.$.ace);
 			this.focusEditor();
@@ -118,9 +196,9 @@ enyo.kind({
 				this.$.ace.highlightActiveLine = false;
 			}
 			this.$.ace.highlightActiveLineChanged();
-			this.$.ace.wordWrap = localStorage.wordwrap;
-
-			if(!this.$.ace.wordwrap || this.$.ace.wordWrap.indexOf("false") != -1){
+			
+			this.$.ace.wordWrap = localStorage.wordwrap;			
+			if(!this.$.ace.wordWrap || this.$.ace.wordWrap.indexOf("false") != -1 && this.$.ace.wordWrap !== "true"){
 				this.$.ace.wordWrap = false;
 			}
 			this.$.ace.wordWrapChanged();
@@ -136,27 +214,55 @@ enyo.kind({
 			var origin = this.projectData.getService().getConfig().origin;
 			this.$.imageViewer.setAttribute("src", origin + file.pathname);
 		}
-		this.reparseAction();					// Synchronous call
-		this.projectCtrl.buildEnyoDb();			// this.buildProjectDb() will be invoked when enyo analysis is finished
-		this.$.documentLabel.setContent(file.name);
+		this.manageDesignerButton();
+		this.reparseAction(true);
+		this.projectCtrl.buildProjectDb();
 
 		this.docData.setEdited(edited);
 		this.$.toolbar.resized();
 	},
 	adjustPanelsForMode: function(mode) {
+		if (this.debug) this.log("mode:", mode);
 		// whether to show or not a panel, imageViewer and ace cannot be enabled at the same time
 		var showModes = {
-			json:		{imageViewer: false, ace: true , saveButton: true , newKindButton: false, designerButton: false,  right: false },
-			javascript:	{imageViewer: false, ace: true , saveButton: true , newKindButton: true,  designerButton: true ,  right: true  },
-			html:		{imageViewer: false, ace: true , saveButton: true , newKindButton: false, designerButton: false,  right: false },
-			css:		{imageViewer: false, ace: true , saveButton: true , newKindButton: false, designerButton: false,  right: true  },
-			text:		{imageViewer: false, ace: true , saveButton: true , newKindButton: false, designerButton: false,  right: false },
-			image:		{imageViewer: true , ace: false, saveButton: false, newKindButton: false, designerButton: false,  right: false }
+			javascript: {
+				imageViewer: false,
+				ace: true,
+				saveButton: true,
+				saveAsButton: true,
+				newKindButton: true,
+				designerButton: true,
+				right: true
+			},
+			image: {
+				imageViewer: true,
+				ace: false,
+				saveButton: false,
+				saveAsButton: false,
+				newKindButton: false,
+				designerButton: false,
+				right: false
+			},
+			text: {
+				imageViewer: false,
+				ace: true,
+				saveButton: true,
+				saveAsButton: true,
+				newKindButton: false,
+				designerButton: false,
+				right: false
+			}
 		};
 
-		var showSettings = showModes[mode]||showModes['text'];
+		var showStuff, showSettings = showModes[mode]||showModes['text'];
 		for (var stuff in showSettings) {
-			this.$[stuff].setShowing( showSettings[stuff] ) ;
+			showStuff = showSettings[stuff];
+			if (this.debug) this.log("show", stuff, ":", showStuff);
+			if (typeof this.$[stuff].setShowing === 'function') {
+				this.$[stuff].setShowing(showStuff) ;
+			} else {
+				this.warn("BUG: attempting to show/hide a non existing element: ", stuff);
+			}
 		}
 
         // xxxIndex: specify what to show in the "RightPanels" kinds (declared at the end of this file)
@@ -176,11 +282,10 @@ enyo.kind({
 		return showSettings.ace ;
 	},
 	showWaitPopup: function(inMessage) {
-		this.$.waitPopupMessage.setContent(inMessage);
-		this.$.waitPopup.show();
+		this.doShowWaitPopup({msg: inMessage});
 	},
 	hideWaitPopup: function() {
-		this.$.waitPopup.hide();
+		this.doHideWaitPopup();
 	},
 	showErrorPopup : function(msg) {
 		this.$.errorPopup.setErrorMsg(msg);
@@ -189,24 +294,44 @@ enyo.kind({
 	//
 	setAutoCompleteData: function() {
 		this.$.autocomplete.hide();
-		this.projectData.on('change:enyo-indexer', this.enyoIndexReady, this);
-		this.projectData.on('change:project-indexer', this.projectIndexReady, this);
-		this.$.autocomplete.setEnyoIndexer(this.projectData.getEnyoIndexer());
-		this.$.autocomplete.setProjectIndexer(this.projectData.getProjectIndexer());
+		this.$.autocomplete.setProjectData(this.projectData);
+		this.manageDesignerButton();
 	},
 	resetAutoCompleteData: function() {
-		this.projectData.off('change:enyo-indexer', this.enyoIndexReady);
-		this.projectData.off('change:project-indexer', this.projectIndexReady);
-		this.$.autocomplete.setEnyoIndexer(null);
-		this.$.autocomplete.setProjectIndexer(null);
+		this.$.autocomplete.setProjectData(null);
 	},
-	enyoIndexReady: function(model, value, options) {
-		// Pass to the autocomplete component a reference to the enyo indexer
-		this.$.autocomplete.setEnyoIndexer(value);
+	/**
+	 	Disable "Designer" button unless project & enyo index are both valid
+	*/
+	manageDesignerButton: function() {
+		// var disabled = !(this.$.autocomplete.getProjectIndexer() && this.$.autocomplete.getEnyoIndexer());
+		var disabled = ! this.projectCtrl.fullAnalysisDone;
+		this.$.designerButton.setDisabled(disabled);
 	},
-	projectIndexReady: function(model, value, options) {
-		// Pass to the autocomplete component a reference to the project indexer
-		this.$.autocomplete.setProjectIndexer(value);
+	/**
+	 * Receive the project data reference which allows to access the analyzer
+	 * output for the project's files, enyo/onyx and all the other project
+	 * related information shared between phobos and deimos.
+	 * @param  oldProjectData
+	 * @protected
+	 */
+	projectDataChanged: function(oldProjectData) {
+		if (this.projectData) {
+			this.projectData.on('update:project-indexer', this.projectIndexerChanged, this);
+		}
+		if (oldProjectData) {
+			oldProjectData.off('update:project-indexer', this.projectIndexerChanged);
+		}
+	},
+	/**
+	 * The current project analyzer output has changed
+	 * Re-scan the indexer
+	 * @param value   the new analyzer output
+	 * @protected
+	 */
+	projectIndexerChanged: function() {
+		this.debug && this.log("Project analysis ready");
+		this.manageDesignerButton();
 	},
 	dumpInfo: function(inObject) {
 		var c = inObject;
@@ -246,30 +371,49 @@ enyo.kind({
 		//
 		this.$.right.$.dump.setContent(h$);
 	},
-	reparseAction: function() {
-		if (this.docData.getMode() === 'javascript') {
-			var module = {
-				name: this.docData.getFile().name,
-				code: this.$.ace.getValue()
-			};
-			try {
-				this.analysis = module;
-				this.$.fileAnalyzer.index.indexModule(module);
-				this.updateObjectsLines(module);
+	//* Updates the projectIndexer (notifying watchers by default) and resets the local analysis file
+	reparseAction: function(inhibitUpdate) {
+		var mode = this.docData.getMode();
+		var module = {
+			name: this.docData.getFile().name,
+			code: this.$.ace.getValue(),
+			path: this.projectCtrl.projectUrl + this.docData.getFile().dir + this.docData.getFile().name
+		};
+		switch(mode) {
+			case "javascript":
+				try {
+					this.analysis = module;
+					this.projectData.getProjectIndexer().reIndexModule(module);
+					if (inhibitUpdate !== true) {
+						this.projectData.updateProjectIndexer();
+					}
+					this.updateObjectsLines(module);
 
-				// dump the object where the cursor is positioned, if it exists
-				this.dumpInfo(module.objects && module.objects[module.currentObject]);
+					// dump the object where the cursor is positioned, if it exists
+					this.dumpInfo(module.objects && module.objects[module.currentObject]);
 
-				// Give the information to the autocomplete component
-				this.$.autocomplete.setAnalysis(this.analysis);
-			} catch(error) {
-				enyo.log("An error occured during the code analysis: " + error);
-				this.dumpInfo(null);
+					// Give the information to the autocomplete component
+					this.$.autocomplete.setAnalysis(this.analysis);
+				} catch(error) {
+					enyo.log("An error occured during the code analysis: " + error);
+					this.dumpInfo(null);
+					this.$.autocomplete.setAnalysis(null);
+				}
+				break;
+			case "json":
+				if (module.name.slice(-7) == ".design") {
+					this.projectData.getProjectIndexer().reIndexDesign(module);
+					if (inhibitUpdate !== true) {
+						this.projectData.updateProjectIndexer();
+					}
+				}
+				this.analysis = null;
 				this.$.autocomplete.setAnalysis(null);
-			}
-		} else {
-			this.analysis = null;
-			this.$.autocomplete.setAnalysis(null);
+				break;
+			default:
+				this.analysis = null;
+				this.$.autocomplete.setAnalysis(null);
+				break;
 		}
 	},
 	/**
@@ -314,60 +458,72 @@ enyo.kind({
 		}
 		return -1;
 	},
+	//* Navigate from Phobos to Deimos. Pass Deimos all relevant info.
 	designerAction: function() {
-		var isDesignProperty={
-			layoutKind: true,
-			attributes: true,
-			classes: true,
-			content: true,
-			controlClasses: true,
-			defaultKind: true,
-			fit: true,
-			src: true,
-			style: true,
-			tag: true,
-			name: true,
-		}
-		var c = this.$.ace.getValue();
+		// Update the projectIndexer and notify watchers
 		this.reparseAction();
+		
+		var kinds = this.extractKindsData(),
+			data = {
+				kinds: kinds,
+				projectData: this.projectData,
+				fileIndexer: this.analysis
+			};
+		
+		if (kinds.length > 0) {
+			// Request to design the current document, passing info about all kinds in the file
+			this.doDesignDocument(data);
+		} else {
+			alert("No kinds found in this file");
+		}
+	},
+	//* Extract info about kinds from the current file needed by the designer
+	extractKindsData: function() {
+		var isDesignProperty = {
+				layoutKind: true,
+				attributes: true,
+				classes: true,
+				content: true,
+				controlClasses: true,
+				defaultKind: true,
+				fit: true,
+				src: true,
+				style: true,
+				tag: true,
+				name: true
+			},
+			c = this.$.ace.getValue(),
+			kinds = [];
+		
 		if (this.analysis) {
-			var kinds = [];
-			/*
-				We now pass projectData and fileIndexer which reference various information related to the project.
-				In particular the analyzer output of all the .js projects files as well as for enyo/onyx
-			 */
-			var data = {kinds: kinds, projectData: this.projectData, fileIndexer: this.analysis};
 			for (var i=0; i < this.analysis.objects.length; i++) {
 				var o = this.analysis.objects[i];
-				if (o.componentsBlockStart && o.componentsBlockEnd) { // only include kinds with components block
-					var start = o.componentsBlockStart;
-					var end = o.componentsBlockEnd;
-					var name = o.name;
-					var kind = o.superkind;
+				var start = o.componentsBlockStart;
+				var end = o.componentsBlockEnd;
+				var name = o.name;
+				var kind = o.superkind;
+				var comps = [];
+				if (start && end) {
 					var js = c.substring(start, end);
-					var comps = eval("(" + js + ")"); // Why eval? Because JSON.parse doesn't support unquoted keys...
-					var comp = {
-						name: name,
-						kind: kind,
-						components: comps
-					}
-					for (var j=0; j < o.properties.length; j++) {
-						var prop = o.properties[j];
-						var pName = prop.name;
-						if (isDesignProperty[pName]) {
-							var value = Documentor.stripQuotes(prop.value[0].name);
-							comp[pName] = value;
-						}
-					}
-					kinds.push(comp);
+					comps = eval("(" + js + ")"); // Why eval? Because JSON.parse doesn't support unquoted keys...
 				}
-			}
-			if (kinds.length > 0) {
-				this.doDesignDocument(data);
-				return;
+				var comp = {
+					name: name,
+					kind: kind,
+					components: comps
+				};
+				for (var j=0; j < o.properties.length; j++) {
+					var prop = o.properties[j];
+					var pName = prop.name;
+					if (isDesignProperty[pName]) {
+						var value = Documentor.stripQuotes(prop.value[0].name);
+						comp[pName] = value;
+					}
+				}
+				kinds.push(comp);
 			}
 		}
-		alert("No kinds found in this file");
+		return kinds;
 	},
 	/**
 	 * Lists the handler methods mentioned in the "handlers"
@@ -434,7 +590,7 @@ enyo.kind({
 	insertMissingHandlers: function() {
 		if (this.analysis) {
 			// Reparse to get the definition of possibly added onXXXX attributes
-			this.reparseAction();
+			this.reparseAction(true);
 
 			/*
 			 * Insert missing handlers starting from the end of the
@@ -442,11 +598,13 @@ enyo.kind({
 			 * the file
 			 */
 			for( var i = this.analysis.objects.length -1 ; i >= 0 ; i-- ) {
-				this.insertMissingHandlersIntoKind(this.analysis.objects[i]);
+				var obj = this.analysis.objects[i];
+				if (obj.components) {
+					this.insertMissingHandlersIntoKind(obj);
+				}
 			}
-
 			// Reparse to get the definition of the newly added methods
-			this.reparseAction();
+			this.reparseAction(true);
 		} else {
 			// There is no parser data for the current file
 			enyo.log("Unable to insert missing handler methods");
@@ -479,18 +637,17 @@ enyo.kind({
 			if (item !== "" && existing[item] === undefined) {
 				codeToInsert += (commaTerminated ? "" : ",\n");
 				commaTerminated = false;
-				codeToInsert += ("    " + item + ": function(inSender, inEvent) {\n        // TO");
-				codeToInsert += ("DO - Auto-generated code\n    }");
+				codeToInsert += ("\t" + item + ": function(inSender, inEvent) {\n\t\t// TO");
+				codeToInsert += ("DO - Auto-generated code\n\t}");
 			}
 		}
 
 		// insert the missing handler methods code in the editor
 		if (object.block) {
 			if (codeToInsert !== "") {
-				codeToInsert += "\n";
 				// Get the corresponding Ace range to replace/insert the missing code
 				// NB: ace.replace() allow to use the undo/redo stack.
-				var pos = object.block.end - 1;
+				var pos = object.block.end - 2;
 				var range = this.$.ace.mapToLineColumnRange(pos, pos);
 				this.$.ace.replaceRange(range, codeToInsert);
 			}
@@ -503,13 +660,25 @@ enyo.kind({
 	updateComponents: function(inSender, inEvent) {
 		for( var i = this.analysis.objects.length -1 ; i >= 0 ; i-- ) {
 			if (inEvent.contents[i]) {
-				// Insert the new version of components
-				var start = this.analysis.objects[i].componentsBlockStart;
-				var end = this.analysis.objects[i].componentsBlockEnd;
+				// Insert the new version of components (replace components block, or insert at end)
+				var obj = this.analysis.objects[i];
+				var comps = inEvent.contents[i];
+				var start = obj.componentsBlockStart;
+				var end = obj.componentsBlockEnd;
+				if (!(start && end)) {
+					// If this kind doesn't have a components block yet, insert a new one
+					// at the end of the file
+					var last = obj.properties[obj.properties.length-1];
+					if (last) {
+						comps = (last.commaTerminated ? "" : ",") + "\n\t" + "components: " + comps;
+						start = obj.block.end - 2;
+						end = obj.block.end - 2;
+					}
+				}
 				// Get the corresponding Ace range to replace the component definition
 				// NB: ace.replace() allow to use the undo/redo stack.
 				var range = this.$.ace.mapToLineColumnRange(start, end);
-				this.$.ace.replaceRange(range, inEvent.contents[i]);
+				this.$.ace.replaceRange(range, comps);
 			}
 		}
 		/*
@@ -591,7 +760,7 @@ enyo.kind({
 		// NOTE: docData will be clear when removed from the Ares.Workspace.files collections
 		this.resetAutoCompleteData();
 		this.docData = null;
-		this.projectData = null;
+		this.setProjectData(null);
 	},
 	// Show Find popup
 	findpop: function(){
@@ -610,6 +779,10 @@ enyo.kind({
 
 	replaceAll: function(){
 		this.$.ace.replaceAll(this.$.findpop.findValue , this.$.findpop.replaceValue);
+	},
+	replacefind: function(){
+		var options = {backwards: false, wrap: true, caseSensitive: false, wholeWord: false, regExp: false};
+		this.$.ace.replacefind(this.$.findpop.findValue , this.$.findpop.replaceValue, options);
 	},
 
 	//ACE replace doesn't replace the currently-selected match. It instead replaces the *next* match. Seems less-than-useful
@@ -652,6 +825,18 @@ enyo.kind({
 		this.$.ace.wordWrap = this.$.editorSettingsPopup.wordWrap;
 		this.$.ace.wordWrapChanged();
 	},
+	toggleww: function(){		
+		if(this.$.ace.wordWrap === "true" || this.$.ace.wordWrap === true){
+			this.$.ace.wordWrap = false;
+			this.$.ace.wordWrapChanged();
+			console.log("wee false");
+		}else{
+			this.$.ace.wordWrap = true;
+			this.$.ace.wordWrapChanged();
+		}
+		
+
+	},
 	changeFont: function(){
 		var fs = this.$.editorSettingsPopup.fSize;
 			this.$.ace.setFontSize(fs);
@@ -659,8 +844,30 @@ enyo.kind({
 
 	tabSize: function() {
 		var ts = this.$.ace.editorSettingsPopup.Tsize;
-		this.log("ts",ts);
 		this.$.ace.setTabSize(ts);
+	},
+	
+	//* Trigger an Ace undo and bubble updated code
+	undoAndUpdate: function() {
+		this.$.ace.undo();
+		this.bubbleCodeUpdate();
+	},
+	//* Trigger an Ace undo and bubble updated code
+	redoAndUpdate: function() {
+		this.$.ace.redo();
+		this.bubbleCodeUpdate();
+	},
+	//* Send up an updated copy of the code
+	bubbleCodeUpdate: function() {
+		// Update the projectIndexer and notify watchers
+		this.reparseAction(true);
+		
+		var data = {kinds: this.extractKindsData(), projectData: this.projectData, fileIndexer: this.analysis};
+		if (data.kinds.length > 0) {
+			this.doUpdate(data);
+		} else {
+			enyo.warn("No kinds found in this file");
+		}
 	}
 });
 

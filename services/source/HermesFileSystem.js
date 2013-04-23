@@ -39,7 +39,7 @@ enyo.kind({
 		if (!this.config.origin) {
 			throw "Service URL not yet defined";
 		}
-		var url = this.config.origin + this.config.pathname + '/id/' + (inNodeId ? inNodeId : "" ) + '?_method=' + inMethod;
+		var url = this.config.origin + this.config.pathname + '/id/' + (inNodeId ? inNodeId : "" );
 		var method = this._requestDic[inMethod].verb;
 		if (this.debug) this.log(inMethod+"/"+method+": '"+url+"'");
 		if (this.debug) this.log("params=", inParams);
@@ -48,8 +48,16 @@ enyo.kind({
 			method: method,
 			handleAs: this._requestDic[inMethod].handleAs,
 			postBody: inParams && inParams.postBody,
-			contentType: inParams && inParams.contentType
+			contentType: inParams && inParams.contentType,
+			headers: {
+				'x-http-method-override': inMethod
+			}
 		};
+
+		if (inMethod === 'GET') {
+			options.mimeType = 'text/plain; charset=x-user-defined';
+		}
+
 		var req = new enyo.Ajax(options);
 		if (inParams && inParams.postBody) {
 			delete inParams.postBody;
@@ -61,6 +69,8 @@ enyo.kind({
 				this.fail();
 				return null;
 			} else {
+				var node = this.xhrResponse.headers['x-ares-node'];
+				if (this.debug) this.log("GET x-ares-node:", node);
 				return inValue;
 			}
 		}).error(function(inSender, inResponse) {
@@ -146,6 +156,16 @@ enyo.kind({
 		// ['/path','.'] resolves to '/path', so using '.'
 		// keeps the file name encoded in inFileId
 		formData.append('file', file, '.' /*filename*/);
+		if (enyo.platform.firefox) {
+			// FormData#append() lacks the third parameter
+			// 'filename', so emulate it using a list of
+			// 'filename'fields of the same size os the
+			// number of files.  This only works if the
+			// other end of the tip is implemented on
+			// server-side.
+			// http://stackoverflow.com/questions/6664967/how-to-give-a-blob-uploaded-as-formdata-a-file-name
+			formData.append('filename', "." );
+		}
 		return this._request("PUT", inFileId, {postBody: formData} /*inParams*/);
 	},
 	createFile: function(inFolderId, inName, inContent) {
@@ -172,12 +192,8 @@ enyo.kind({
 		var newFolder = inFolderId + "/" + inName;
 		return this._request("MKCOL", inFolderId, {name: inName} /*inParams*/)
 			.response(function(inSender, inResponse) {
-				// FIXME: id of created folder needs to be returned from service
-				// FTP node server returns an object, includes 'id' field
-				// DROPBOX node server returns an object, has no 'id' field
-				//this.log("AresProvider.createFolder: inResponse = ", inResponse);
 				if (this.debug) this.log(inResponse);
-				return inResponse.id || inResponse.path || newFolder;
+				return inResponse;
 			});
 	},
 	remove: function(inNodeId) {
@@ -188,5 +204,12 @@ enyo.kind({
 	},
 	copy: function(inNodeId, inNewName) {
 		return this._request("COPY", inNodeId, {name: inNewName}  /*inParams*/);
+	},
+	exportAs: function(inNodeId, inDepth) {
+		return this._request("GET", inNodeId, {depth: inDepth, format: "base64"} /*inParams*/)
+			.response(function(inSender, inValue) {
+				if (this.debug) this.log(inValue);
+				return inValue;
+			});
 	}
 });

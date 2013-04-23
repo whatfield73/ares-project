@@ -16,37 +16,31 @@ enyo.kind({
 			onProjectRemoved: "projectRemoved",
 			onProjectSelected: "handleProjectSelected",
 			name: "projectList"},
-		{kind: "Harmonia", fit:true, name: "harmonia", providerListNeeded: false},
+		{kind: "Harmonia", fit:true, name: "harmonia"},
 		{kind: "ProjectWizardCreate", canGenerate: false, name: "projectWizardCreate"},
 		{kind: "ProjectWizardScan", canGenerate: false, name: "projectWizardScan"},
-		{kind: "ProjectWizardModify", canGenerate: false, name: "projectWizardModify"},
-		{name: "errorPopup", kind: "Ares.ErrorPopup", msg: "unknown error", details: ""},
-		{name: "waitPopup", kind: "onyx.Popup", centered: true, floating: true, autoDismiss: false, modal: true, style: "text-align: center; padding: 20px;", components: [
-			{kind: "Image", src: "$phobos/images/save-spinner.gif", style: "width: 54px; height: 55px;"},
-			{name: "waitPopupMessage", content: "Ongoing...", style: "padding-top: 10px;"}
-		]}
+		{kind: "ProjectWizardModify", canGenerate: false, name: "projectWizardModify"}
 	],
 	handlers: {
 		onAddProjectInList: "addProjectInList",
-		onPhonegapBuild: "startPhonegapBuild",
-		onBuildStarted: "phonegapBuildStarted",
-		onPreview: "launchPreview",
-		onError: "showError",
-		onShowWaitPopup: "handleShowWaitPopup"
+		onPreviewProject: "previewProjectAction",
+		onBuildProject: "buildProjectAction"
+	},
+	events: {
+		onHideWaitPopup: "",
+		onShowWaitPopup: "",
+		onError: ""
 	},
 	create: function() {
 		this.inherited(arguments);
 	},
-	showError: function(inSender, inEvent) {
-		if (this.debug) this.log("event:", inEvent, "from sender:", inSender);
-		this.hideWaitPopup();
-		this.showErrorPopup(inEvent.msg, inEvent.details);
-		return true; //Stop event propagation
+	/**
+	 * Refresh the {ProjectView} (if relevant), following a change of the given file
+	 * @param {Object} changedFile
+	 */
+	refreshFile: function(changedFile) {
+		this.$.harmonia.refreshFile(changedFile);
 	},
-	showErrorPopup : function(msg, details) {
-		this.$.errorPopup.raise(msg, details);
-	},
-
 	scanProjectAction: function(inSender, inEvent) {
 		this.$.projectWizardScan.setHeaderText('Select a directory containing one or more project.json files');
 		this.$.projectWizardScan.show();
@@ -62,14 +56,14 @@ enyo.kind({
 	},
 
 	addProjectInList: function(inSender, inEvent) {
-		this.hideWaitPopup();
+		this.doHideWaitPopup();
 		try {
 			// Add an entry into the project list
 			this.$.projectList.addProject(inEvent.name, inEvent.folderId, inEvent.service);
 		} catch(e) {
 				var msg = e.toString();
-				this.showErrorPopup(msg);
 				this.error(msg);
+				this.doError({msg: msg});
 				return false;
 		}
 		return true; //Stop event propagation
@@ -90,43 +84,41 @@ enyo.kind({
 			service: project.getService(),
 			folderId: project.getFolderId()
 		}, function(err) {
-			if (err) self.showErrorPopup(err.toString());
+			if (err) self.doError({msg: err.toString(), err: err});
 			project.setConfig(config);
 		});
 		this.currentProject = project;
-		return true; //Stop event propagation
 	},
 	projectRemoved: function(inSender, inEvent) {
 		this.$.harmonia.setProject(null);
 	},
-	handleShowWaitPopup: function(inSender, inEvent) {
-		this.showWaitPopup(inEvent.msg);
-	},
-	showWaitPopup: function(inMessage) {
-		this.$.waitPopupMessage.setContent(inMessage);
-		this.$.waitPopup.show();
-	},
-	hideWaitPopup: function() {
-		this.$.waitPopup.hide();
-	},
-	startPhonegapBuild: function(inSender, inEvent) {
-		if (!this.currentProject) {
+	/**
+	 * Event handler: Select the project builder
+	 * @param {enyo.Component} inSender
+	 * @param {Object} inEvent
+	 * @property inEvent {Ares.Model.Project} project 
+	 * @private
+	 */
+	buildProjectAction: function(inSender, inEvent) {
+		var project = inEvent && inEvent.project;
+		if (!project) {
 			return true; // stop bubble-up
 		}
 		var self = this;
-		this.showWaitPopup("Starting project build");
-		// [0] assumes a single builder
-		var bdService =	ServiceRegistry.instance.getServicesByType('build')[0];
+		this.doShowWaitPopup({msg: "Starting project build"});
+		// TODO: Must be reworked to allow the selection of builder in the UI - ENYO-2049
+		var services = ServiceRegistry.instance.getServicesByType('build');
+		var bdService =	services[services.length - 1];
 		if (bdService) {
 			bdService.build( /*project*/ {
-				name: this.currentProject.getName(),
-				filesystem: this.currentProject.getService(),
-				folderId: this.currentProject.getFolderId(),
-				config: this.currentProject.getConfig()
+				name: project.getName(),
+				filesystem: project.getService(),
+				folderId: project.getFolderId(),
+				config: project.getConfig()
 			}, function(inError, inDetails) {
-				self.hideWaitPopup();
+				self.doHideWaitPopup();
 				if (inError) {
-					self.showErrorPopup(inError.toString(), inDetails);
+					self.doError({msg: inError.toString(), err: inError, details: inDetails});
 				}
 			});
 		} else {
@@ -135,19 +127,19 @@ enyo.kind({
 		}
 		return true; // stop bubble-up
 	},
-	phonegapBuildStarted: function(inSender, inEvent) {
-		this.showWaitPopup("Phonegap build started");
-		setTimeout(enyo.bind(this, "hideWaitPopup"), 2000);
-	},
-
 	/**
-	 * Launch a preview widget of the selected project in a separate frame
+	 * Event handler: Launch a preview widget of the selected project in a separate frame
+	 * @param {enyo.Component} inSender
+	 * @param {Object} inEvent
+	 * @property inEvent {Ares.Model.Project} project 
+	 * @private
 	 */
-	launchPreview: function(inSender, inEvent) {
-		if ( this.currentProject) {
-			var config = this.currentProject.getConfig() ;
+	previewProjectAction: function(inSender, inEvent) {
+		var project = inEvent.project;
+		if ( project) {
+			var config = project.getConfig() ;
 			var topFile = config.data.preview.top_file ;
-			var projectUrl = this.currentProject.getProjectUrl() + '/' + topFile ;
+			var projectUrl = project.getProjectUrl() + '/' + topFile ;
 
 			// the last replace method is needed for test environment only
 			var winLoc = window.location.toString().replace('ares','preview').replace('test', 'index') ;
@@ -155,7 +147,7 @@ enyo.kind({
 				+ ( winLoc.indexOf('?') != -1 ? '&' : '?' )
 				+ 'url=' + encodeURIComponent(projectUrl);
 
-			this.log("preview on URL " + previewUrl) ;
+			if (this.debug) this.log("preview on URL " + previewUrl) ;
 
 			window.open(
 				previewUrl,
@@ -166,5 +158,4 @@ enyo.kind({
 		}
 		return true; // stop the bubble
 	}
-
 });

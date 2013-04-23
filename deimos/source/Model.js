@@ -3,9 +3,25 @@ enyo.singleton({
 	kind: "enyo.Component",
 	debug: false,
 	info: {},
-	config: [],
-	defaults: null,				// populated by base-design.js
-
+	defaults: {
+		properties: {
+			owner: {filterLevel: "hidden"},
+			container: {filterLevel: "hidden"},
+			parent: {filterLevel: "hidden"},
+			prepend: {filterLevel: "hidden"},
+			events: {filterLevel: "hidden"},
+			id: {filterLevel: "hidden"},
+			isContainer: {filterLevel: "hidden"},
+			controlParentName: {filterLevel: "hidden"},
+			layoutKind: {filterLevel: "hidden"},
+			canGenerate: {filterLevel: "dangerous", inputKind: "Inspector.Config.Boolean"},
+			content: {filterLevel: "useful", inputKind: "Inspector.Config.Text"},
+			name: {filterLevel: "useful", inputKind: "Inspector.Config.Text"}
+		},
+		events: {
+			ontap: {filterLevel: "useful"}
+		}
+	},
 	F_HIDDEN: -1,
 	F_DANGEROUS: 1,
 	F_NORMAL: 2,
@@ -26,24 +42,26 @@ enyo.singleton({
 	 * Build all the information needed by the inspector
 	 * @public
 	 */
-	buildInformation: function() {
-		this.palette = Palette.model,		// TODO: Should replace Palette.model
+	buildInformation: function(projectIndexer) {
+		if (this.debug)  { this.log("buildInformation: Indexer: ", projectIndexer); }
+		this.info = {};
 		this.addInformation("properties", "__default", this.defaults.properties);
 		this.addInformation("events", "__default", this.defaults.events);
 
-		enyo.forEach(this.config, function(item) {
+		enyo.forEach(projectIndexer.propertyMetaData, function(item) {
 			if (item.type === "kind") {
-				this.debug && this.log("Processing: " + item.name, item);
+				if (this.debug) { this.log("Processing: " + item.name, item); }
 				this.addInformation("properties", item.name, item.properties);
 				this.addInformation("events", item.name, item.events);
 			} else {
 				enyo.error("Unknown data type='" + item.type + "' -- Ignored");
 			}
 		}, this);
+		
 	},
 	addInformation: function(inType, inName, inInfo) {
 		if (inInfo) {
-			this.debug && this.log("Adding " + inType + " information for " + inName);
+			if (this.debug) { this.log("addInformation: Adding " + inType + " information for " + inName); }
 
 			var fn = function(inType, inName, inSubName, inData) {
 				if (inData.filterLevel) {
@@ -55,7 +73,7 @@ enyo.singleton({
 				} else {
 					inData.level = Model.F_NORMAL;
 				}
-				this.debug && this.log("Setting level " + inData.level + " for " + inType + " " + inName + "." + inSubName);
+				if (this.debug) { this.log("addInformation: Setting level " + inData.level + " for " + inType + " " + inName + "." + inSubName); }
 			};
 			var addFilterLevel = enyo.bind(this, fn, inType, inName);
 
@@ -90,5 +108,10 @@ enyo.singleton({
 			info = this.getInfo("__default", inType, inName);
 			return (info && info.level) || Model.F_NORMAL;
 		}
+	},
+	getFlattenedContainerInfo: function() {		
+		// TODO FiX me - ???
+		// function called by the IFrameDesigner.sendIframeContainerData()
+		return null;
 	}
 });

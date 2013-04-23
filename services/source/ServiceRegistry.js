@@ -1,7 +1,13 @@
+/**
+ * Manages registered Hermes services
+ * 
+ * @class ServiceRegistry
+ * @augments enyo.Component
+ */
 enyo.kind({
 	name: "ServiceRegistry",
 	debug: false,
-	kind: enyo.Component,
+	kind: "enyo.Component",
 	events: {
 		onServicesChange: ""
 	},
@@ -89,7 +95,6 @@ enyo.kind({
 				})
 				.go();
 		}
-		
 	},
 	/**
 	 * Complete services configuration using localStorage
@@ -104,7 +109,7 @@ enyo.kind({
 	 */
 	complete: function(next) {
 		var self = this,
-		    tasks = enyo.map(this.services, function(service){
+			tasks = enyo.map(this.services, function(service){
 			return function(cb) {
 				var key = [self.SERVICES_STORAGE_KEY, service.config.id].join('.');
 				if (self.debug) self.log("localStorage[" + key + "]...");
@@ -117,39 +122,85 @@ enyo.kind({
 						obj = {};
 					}
 					ares.extend(service.config, obj);
+
+					// Add an helper function to check interfaces implemented by a service
+					ares.extend(service, {
+						implementsType: function(expected) {
+							return enyo.filter(this.config.type, function(type) {
+								return type === expected;
+							}).length > 0;
+						}
+					});
 					self.instanciate(service, cb);
 				});
 			};
 		});
-		async.parallel(tasks, next);
+		async.series(tasks, next);
 	},
 	instanciate: function(service, next) {
 		if (this.debug) this.log("id:", service.config.id, "config:", service.config);
 		try {
-			if (service.config.type === "filesystem" && service.config.provider === "hermes") {
+			if (service.config.pluginUrl) {
+				if (this.debug) this.log("Loading browser side code: " + service.config.pluginUrl);
+				enyo.load(service.config.pluginUrl, function() {
+					if (this.debug) this.log("LOADED browser side code: " + service.config.pluginUrl);
+				}.bind(this));
+				next();		// configuration will be applied later on
+			} else if (service.config.provider === 'hermes' && service.implementsType("filesystem")) {
 				// hermes type of services use
 				// a common front-end
 				service.impl = new HermesFileSystem();
 				service.impl.notifyFailure = enyo.bind(this, this.serviceFailure, service.config.type, service.config.id);
-			} else if (service.config.type === "build" && service.config.provider === "hermes" && service.config.id === "phonegap") {
-				service.impl = new PhonegapBuild();
-			} else if (service.config.type === "other" && service.config.provider === "hermes" && service.config.id === "openwebos") {
-				service.impl = new OpenwebosBuild();
+				this.configureService(service, next);
+			} else if (service.implementsType("build") && service.config.id === "phonegap") {
+				service.impl = new Phonegap.Build();
+				this.configureService(service, next);
+			} else if (service.implementsType("generate") && service.config.id === "genZip") {
+				service.impl = new ProjectToolkit();
+				this.configureService(service, next);
+			} else {
+				this.log("Ignoring service: " + service.config.id);
+				next();
 			}
-			if (this.debug) this.log("id:", service.config.id, "created");
-			// If the service does not define an
-			// 'authorize()' entry point (which optionally
-			// returns user acccount information), stub it
-			// using a Common-JS pass-through.
-			if (service.impl && !service.impl.authorize) {
-				if (this.debug) this.log("Adding " + service.config.id + "#authorize() stub");
-				service.impl.authorize = enyo.bind(service.impl, function(next) {
-					if (this.debug) this.log('authorize(): stubbed');
-					next(null, {});
-				});
+		} catch(err) {
+			this.error(err);
+			next(err);
+		}
+	},
+	configureService: function(service, next) {
+		if (this.debug) this.log("id:", service.config.id, "config:", service.config);
+		try {
+			if (service.impl) {
+				if (this.debug) this.log("id:", service.config.id, "created");
+				// If the service does not define an
+				// 'authorize()' entry point (which optionally
+				// returns user acccount information), stub it
+				// using a Common-JS pass-through.
+				if (service.impl && !service.impl.authorize) {
+					if (this.debug) this.log("Adding " + service.config.id + "#authorize() stub");
+					service.impl.authorize = enyo.bind(service.impl, function(next) {
+						if (this.debug) this.log('authorize(): stubbed');
+						next(null, {});
+					});
+				}
+
+				// Make sure both the service configuration
+				// Object & the resulting implementation
+				// Object know the serviceId.
+				service.impl.id = service.config.id;
+
+				try {
+					service.impl.setConfig(service.config);
+				} catch(pluginError) {
+					var msg = "Unexpected error in setConfig() of service '" + service.config.id + "'";
+					this.error(msg, pluginError);
+					pluginError.msg = msg;
+					throw pluginError;
+				}
+				if (this.debug) this.log("id:", service.config.id, "configured");
+			} else {
+				if (this.debug) this.log("Ignoring service: " + service.config.id);
 			}
-			service.impl.setConfig(service.config);
-			if (this.debug) this.log("id:", service.config.id, "configured");
 			next();
 		} catch(err) {
 			this.error(err);
@@ -190,7 +241,9 @@ enyo.kind({
 	 * @see ServiceRegistry#filter
 	 */
 	resolveServiceId: function(serviceId) {
-		var services = this.filter({properties: ['id'], id: serviceId});
+		var services = this.filter(function(service) {
+			return service.config.id === serviceId;
+		});
 		return services && services[0];
 	},
 	/**
@@ -206,44 +259,54 @@ enyo.kind({
 	 * @see ServiceRegistry#filter
 	 */
 	getServicesByType: function(type) {
-		return this.filter({properties: ['type'], type: type});
+		return this.filter(function(service) {
+			return service.implementsType(type);
+		});
 	},
 	/**
 	 * Get {Array} or service matching the given criteria
-	 * @param {Object} criterai
+	 * @param {Object} criteria
 	 * @return {Array} services matching the required criteria
 	 * @public
 	 */
-	filter: function(criteria) {
-		//if (this.debug) this.log("criteria:", criteria, ", services:", this.services);
-		var matches = enyo.filter(this.services, function(service){
-			var match = true;
-			if (criteria &&
-			    criteria.properties &&
-			    criteria.properties.length &&
-			    criteria.properties[0]) {
-				enyo.forEach(criteria.properties, function(prop) {
-					if (criteria[prop]) {
-						// filter on criteria property value
-						match = match && (service.config[prop] === criteria[prop]);
-					} else {
-						// filter on criteria property presence
-						match = match && (service.config[prop] !== undefined);
-					}
-				}, this);
+	filter: function(inFilterFunc, withNoImpl) {
+		try {
+			if (typeof inFilterFunc !== 'function') {
+				throw new Error("Parameter 'inFilterFunc' must be a function");
 			}
-			//if (this.debug) this.log("match:", match, "<= service:", service.config);
-			return match;
-		}, this);
-		var services = [];
-		//if (this.debug) this.log("matches:", matches);
-		enyo.forEach(matches, function(match){
-			if (match.impl) { 
-				services.push(match.impl);
+			withNoImpl = withNoImpl || false;
+			var matches = enyo.filter(this.services, inFilterFunc, this);
+			var services = [];
+			//if (this.debug) this.log("matches:", matches);
+			enyo.forEach(matches, function(match){
+				if (match.impl)  {
+					services.push(match.impl);
+				} else if (withNoImpl === true) {
+					services.push(match);
+				}
+			}, this);
+			if (this.debug) this.log("withNoImpl:", withNoImpl, " => services:", services);
+			return services;
+		} catch(error) {
+			this.error("Unexpected error", error);
+			return [];
+		}
+	},
+	/**
+	 * Calls the given callback for each instanciated service
+	 * 
+	 * The service implementation instance is the first & only
+	 * parameter of the callback.
+	 * 
+	 * @param {Function} fn the callback
+	 * @return nothing
+	 */
+	forEach: function(fn) {
+		enyo.forEach(this.services, function(service) {
+			if (service.impl) {
+				fn(service.impl);
 			}
 		}, this);
-		if (this.debug) this.log("criteria:", criteria , " => services:", services);
-		return services;
 	},
 	//* @private
 	_handleReloadError: function(err) {
@@ -262,6 +325,34 @@ enyo.kind({
 	notifyServicesChange: function() {
 		if (this.debug) this.log("sending signal...");
 		enyo.Signals.send("onServicesChange", {serviceRegistry: this});
+	},
+	/**
+	 * Called by loaded plugins to complete registration in Ares
+	 * @param {String} serviceId
+	 * @param {Object} kindInformation the parameter for enyo.createComponent
+	 * @param {Function} next commonJS callback
+	 */
+	pluginReady: function(serviceId, kindInformation, next) {
+		if (this.debug) this.log("New plugin ready: " + serviceId);
+		next = next || function(err) {
+			if (err) enyo.error(err);
+		};
+		var services = this.filter(function(service) {
+			return service.config.id === serviceId;
+		}, true);
+		if (services.length === 1) {
+			var service = services[0];
+			if (service.config.pluginUrl &&  (! service.impl)) {
+				try {
+					service.impl = ServiceRegistry.instance.createComponent(kindInformation);
+					this.configureService(service, next);
+					if (this.debug) this.log("New plugin registered: " + serviceId);
+				} catch(err) {
+					this.error("Unexpected error while creating '" + kindInformation.kind + "' for service " + serviceId , err);
+					next(err);
+				}
+			}
+		}
 	},
 	statics: {
 		instance: null

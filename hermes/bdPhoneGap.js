@@ -2,6 +2,8 @@
  * Hermes PhoneGap build service
  */
 
+// nodejs version checking is done in parent process ide.js
+
 var fs = require("fs"),
     path = require("path"),
     express = require("express"),
@@ -14,8 +16,7 @@ var fs = require("fs"),
     rimraf = require("rimraf"),
     http = require("http"),
     child_process = require("child_process"),
-    api = require("phonegapbuildapi"),
-    optimist = require('optimist');
+    api = require("phonegapbuildapi");
 
 var basename = path.basename(__filename);
 
@@ -183,12 +184,12 @@ function BdPhoneGap(config, next) {
 	// protocol, host, port, pathname) to the creator, when port
 	// is bound
 	server.listen(config.port, "127.0.0.1", null /*backlog*/, function() {
-		var port = server.address().port;
+		var tcpAddr = server.address();
 		return next(null, {
 			protocol: 'http',
-			host: '127.0.0.1',
-			port: port,
-			origin: "http://127.0.0.1:"+ port,
+			host: tcpAddr.address,
+			port: tcpAddr.port,
+			origin: "http://" + tcpAddr.address + ":"+ tcpAddr.port,
 			pathname: config.pathname
 		});
 	});
@@ -250,49 +251,69 @@ function BdPhoneGap(config, next) {
 
 	function deploy(req, res, next) {
 		console.log("deploy(): started");
-		// Execute the deploy.js script that comes with Enyo.
-		// 
-		// TODO: scalable processing is better acheived using
-		// VM <http://nodejs.org/api/vm.html> rather than
-		// child-processes
-		// <http://nodejs.org/api/child_process.html>.
-		var params = [ '--verbose',
-			       '--packagejs', path.join(req.appDir.source, 'package.js'),
-			       '--source', req.appDir.source,
-			       '--enyo', config.enyoDir,
-			       '--build', req.appDir.build,
-			       '--out', req.appDir.deploy,
-			       '--less'];
-		console.log("deploy(): Running: '", deployScript, params.join(' '), "'");
-		var child = child_process.fork(deployScript, params, {
-			silent: false
-		});
-		child.on('message', function(msg) {
-			console.log("deploy():", msg);
-			if (msg.error) {
-				console.error("child-process error: ", util.inspect(msg.error));
-				child.errMsg = msg.error;
-			} else {
-				console.error("unexpected child-process message msg=", util.inspect(msg));
-			}
-		});
-		child.on('exit', function(code, signal) {
-			if (code !== 0) {
-				next(new HttpError(child.errMsg || ("child-process failed: '"+ child.toString() + "'")));
-			} else {
-				console.log("deploy(): completed");
+
+		var appManifest = path.join(req.appDir.source, 'package.js');
+		fs.stat(appManifest, function(err) {
+			if (err) {
+				// No top-level package.js: this is
+				// not a Bootplate-based Enyo
+				// application & we have no clue on
+				// wether it is even an Enyo
+				// application, so we cannot `deploy`
+				// it easily.
+				console.log("no '" + appManifest + "': not an Enyo Bootplate-based application");
+				req.appDir.zipRoot = req.appDir.source;
 				next();
+			} else {
+				req.appDir.zipRoot = req.appDir.deploy;
+
+				// Execute the deploy.js script that comes with Enyo.
+				// 
+				// TODO: scalable processing is better acheived using
+				// VM <http://nodejs.org/api/vm.html> rather than
+				// child-processes
+				// <http://nodejs.org/api/child_process.html>.
+				var params = [ '--verbose',
+					       '--packagejs', path.join(req.appDir.source, 'package.js'),
+					       '--source', req.appDir.source,
+					       '--enyo', config.enyoDir,
+					       '--build', req.appDir.build,
+					       '--out', req.appDir.deploy,
+					       '--less'];
+				console.log("deploy(): Running: '", deployScript, params.join(' '), "'");
+				var child = child_process.fork(deployScript, params, {
+					silent: false
+				});
+				child.on('message', function(msg) {
+					console.log("deploy():", msg);
+					if (msg.error) {
+						console.error("child-process error: ", util.inspect(msg.error));
+						child.errMsg = msg.error;
+					} else {
+						console.error("unexpected child-process message msg=", util.inspect(msg));
+					}
+				});
+				child.on('exit', function(code, signal) {
+					if (code !== 0) {
+						next(new HttpError(child.errMsg || ("child-process failed: '"+ child.toString() + "'")));
+					} else {
+						console.log("deploy(): completed");
+						next();
+					}
+				});
 			}
 		});
 	}
 
 	function zip(req, res, next) {
+		console.log("zip(): Zipping '" + req.appDir.zipRoot + "'");
+
 		//console.log("zip(): ");
 		req.zip = {};
 		req.zip.path = path.join(req.appDir.root, "app.zip");
 		req.zip.stream = zipstream.createZip({level: 1});
 		req.zip.stream.pipe(fs.createWriteStream(req.zip.path));
-		_walk.bind(this)(req.appDir.deploy, "" /*prefix*/, function() {
+		_walk.bind(this)(req.appDir.zipRoot, "" /*prefix*/, function() {
 			try {
 				req.zip.stream.finalize(function(written){
 					console.log("finished ", req.zip.path);
@@ -486,44 +507,36 @@ function BdPhoneGap(config, next) {
 if (path.basename(process.argv[1]) === basename) {
 	// We are main.js: create & run the object...
 
-	var version = process.version.match(/[0-9]+.[0-9]+/)[0];
-	if (version <= 0.7) {
-		process.exit("Only supported on Node.js version 0.8 and above");
+	var knownOpts = {
+		"port":		Number,
+		"pathname":	String,
+		"level":	['silly', 'verbose', 'info', 'http', 'warn', 'error'],
+		"help":		Boolean
+	};
+	var shortHands = {
+		"p": "--port",
+		"P": "--pathname",
+		"l": "--level",
+		"v": "--level verbose",
+		"h": "--help"
+	};
+	var argv = require('nopt')(knownOpts, shortHands, process.argv, 2 /*drop 'node' & basename*/);
+	argv.pathname = argv.pathname || "/phonegap";
+	argv.port = argv.port || 0;
+	argv.level = argv.level || "http";
+	if (argv.help) {
+		console.log("Usage: node " + basename + "\n" +
+			    "  -p, --port        port (o) local IP port of the express server (0: dynamic)         [default: '0']\n" +
+			    "  -P, --pathname    URL pathname prefix (before /deploy and /build                    [default: '/phonegap']\n" +
+			    "  -l, --level       debug level ('silly', 'verbose', 'info', 'http', 'warn', 'error') [default: 'http']\n" +
+			    "  -h, --help        This message\n");
+		process.exit(0);
 	}
 
-	var argv = optimist.usage(
-		"Ares PhoneGap build service\nUsage: $0 [OPTIONS]", {
-			'P': {
-				description: "URL pathname prefix (before /deploy and /build",
-				required: false,
-				default: "/phonegap"
-			},
-			'p': {
-				description: "TCP port number",
-				required: false,
-				default: "9029"
-			},
-			'e': {
-				description: "Path to the Enyo version to use for minifying the application",
-				required: false,
-				default: path.resolve(__dirname, '..', 'enyo')
-			},
-			'h': {
-				description: "Display help",
-				boolean: true,
-				required: false
-			}
-		}).argv;
-	
-	if (argv.h) {
-		optimist.showHelp();
-		process.exit(0);
-	};
-
 	new BdPhoneGap({
-		pathname: argv.P,
-		port: parseInt(argv.p, 10),
-		enyoDir: argv.e
+		pathname: argv.pathname,
+		port: argv.port,
+		enyoDir: path.resolve(__dirname, '..', 'enyo')
 	}, function(err, service){
 		if(err) process.exit(err);
 		// process.send() is only available if the
