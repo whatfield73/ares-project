@@ -1,89 +1,118 @@
+#!/usr/bin/env node
+
 /**
  *  ARES IDE server
  */
 
-//extract major version
-var version = process.version.match(/[0-9]+.[0-9]+/)[0];
-if (version <= 0.7) {
-	console.error("Ares ide.js is only supported on Node.js version 0.8 and above");
-	process.exit(1);
-}
-
 var fs = require("fs"),
     path = require("path"),
     express = require("express"),
-    optimist = require("optimist"),
+    npmlog = require('npmlog'),
+    nopt = require('nopt'),
     util  = require('util'),
     spawn = require('child_process').spawn,
     querystring = require("querystring"),
-    http = require('http'),
-    HttpError = require(path.resolve(__dirname, "hermes/lib/httpError"));
+    versionTools = require('./hermes/lib/version-tools'),
+    http = require('http');
 
-var argv = optimist.usage('\nAres IDE, a front-end designer/editor web applications.\nUsage: "$0" [OPTIONS]\n')
-	.options('h', {
-		alias : 'help',
-		description: 'help message',
-		boolean: true
-	})
-	.options('T', {
-		alias : 'runtest',
-		description: 'Run the non-regression test suite',
-		boolean: true
-	})
-	.options('b', {
-		alias : 'browser',
-		description: 'Open the default browser on the Ares URL',
-		boolean: true
-	})
-	.options('p', {
-		alias : 'port',
-		description: 'port (o) local IP port of the express server (default: 9009, 0: dynamic)',
-		default: '9009'
-	})
-	.options('H', {
-		alias : 'host',
-		description: 'host to bind the express server onto',
-		default: '127.0.0.1'
-	})
-	.options('a', {
-		alias : 'listen_all',
-		description: 'When set, listen to all adresses. By default, listen to the address specified with -H',
-		'boolean': true
-	})
-	.options('c', {
-		alias : 'config',
-		description: 'IDE configuration file',
-		default: path.resolve(__dirname, "ide.json")
-	})
-	.options('v', {
-		alias : 'verbose',
-		description: 'Increase IDE verbosity in the console',
-		boolean: true
-	})
-	.argv;
+var myDir = typeof(__dirname) !== 'undefined' ?  __dirname : path.resolve('') ;
+var HttpError = require(path.resolve(myDir, "hermes/lib/httpError"));
+
+/**********************************************************************/
+
+var knownOpts = {
+	"help":		Boolean,
+	"runtest":	Boolean,
+	"browser":	Boolean,
+	"port":		Number,
+	"host":		String,
+	"listen_all":	Boolean,
+	"config":	path,
+	"level":	['silly', 'verbose', 'info', 'http', 'warn', 'error'],
+	"log":		Boolean,
+	"version":	Boolean
+};
+var shortHands = {
+	"h": ["--help"],
+	"T": ["--runtest"],
+	"b": ["--browser"],
+	"p": ["--port"],
+	"H": ["--host"],
+	"a": ["--listen_all"],
+	"c": ["--config"],
+	"l": ["--level"],
+	"L": ["--log"],
+	"V": ["--version"]
+};
+var argv = nopt(knownOpts, shortHands, process.argv, 2 /*drop 'node' & 'ide.js'*/);
+
+argv.config = argv.config || path.join(__dirname, "ide.json");
+argv.host = argv.host || "127.0.0.1";
+argv.port = argv.port || 9009;
 
 if (argv.help) {
-	optimist.showHelp();
+	console.log("\n" +
+		"Ares IDE, a front-end designer/editor web applications.\n" +
+		"\n" +
+		"Usage: 'node ./ide.js' [OPTIONS]\n" +
+		"\n" +
+		"OPTIONS:\n" +
+		"  -h, --help        help message                                                                           [boolean]\n" +
+		"  -T, --runtest     Run the non-regression test suite                                                      [boolean]\n" +
+		"  -b, --browser     Open the default browser on the Ares URL                                               [boolean]\n" +
+		"  -p, --port        port (o) local IP port of the express server (default: 9009, 0: dynamic)               [default: '9009']\n" +
+		"  -H, --host        host to bind the express server onto                                                   [default: '127.0.0.1']\n" +
+		"  -a, --listen_all  When set, listen to all adresses. By default, listen to the address specified with -H  [boolean]\n" +
+		"  -c, --config      IDE configuration file                                                                 [default: './ide.json']\n" +
+		"  -l, --level       IDE debug level ('silly', 'verbose', 'info', 'http', 'warn', 'error')                  [default: 'http']\n" +
+		"  -L, --log         Log IDE debug to ./ide.log                                                             [boolean]\n");
 	process.exit(0);
 }
 
-function log() {
-	if (argv.verbose) {
-		var arg, msg = arguments.callee.caller.name + '(): ';
-		for (var argi = 0; argi < arguments.length; argi++) {
-			arg = arguments[argi];
-			if (typeof arg === 'object') {
-				msg += util.inspect(arg);
-			} else {
-				msg += arg;
-			}
-			msg += ' ';
-		}
-		console.log(msg);
-	};
+/**********************************************************************/
+
+var log = npmlog;
+log.heading = 'ares';
+log.level = 'http';
+
+log.level = argv.level || 'http';
+if (argv.log) {
+	log.stream = fs.createWriteStream('ide.log');
 }
 
-log("Arguments:", argv);
+versionTools.setLogger(log);
+if (argv.version) {
+	versionTools.showVersionAndExit();
+}
+
+versionTools.checkNodeVersion();		// Exit in case of error
+
+function m() {
+	var arg, msg = '';
+	for (var argi = 0; argi < arguments.length; argi++) {
+		arg = arguments[argi];
+		if (typeof arg === 'object') {
+			msg += util.inspect(arg);
+		} else {
+			msg += arg;
+		}
+			msg += ' ';
+	}
+	return msg;
+}
+
+log.info('main', m("Arguments:", argv));
+
+/**********************************************************************/
+
+// Exit path
+
+process.on('uncaughtException', function (err) {
+	log.error('main', err.stack);
+	process.exit(1);
+});
+process.on('exit', onExit);
+process.on('SIGINT', onExit);
 
 // Load IDE configuration & start per-project file servers
 
@@ -93,6 +122,7 @@ var subProcesses = [];
 var platformVars = [
 	{regex: /@NODE@/, value: process.argv[0]},
 	{regex: /@CWD@/, value: process.cwd()},
+	{regex: /@INSTALLDIR@/, value: __dirname},
 	{regex: /@HOME@/, value: process.env[(process.platform == 'win32') ? 'USERPROFILE' : 'HOME']}
 ];
 
@@ -106,105 +136,228 @@ function platformSubst(inStr) {
 	return outStr;
 }
 var platformOpen = {
-	win32: "Start",
-	darwin: "open",
-	linux: "xdg-open"
+	win32: [ "cmd" , '/c', 'start' ],
+	darwin:[ "open" ],
+	linux: [ "xdg-open" ]
 };
 
-var configPath;
+var configPath, tester;
+var configStats;
+var serviceMap = {};
+
 if (argv.runtest) {
-	configPath = path.resolve(__dirname, "ide-test.json");
+	tester = require('./test/tester/main.js');
+	configPath = path.resolve(myDir, "ide-test.json");
 } else{
 	configPath = argv.config;
 }
-if (!fs.existsSync(configPath)) {
-	throw "Did not find: '"+configPath+"': ";
+
+function loadMainConfig(configFile) {
+	if (!fs.existsSync(configFile)) {
+		throw "Did not find: '"+configFile+"': ";
+	}
+
+	log.verbose('loadMainConfig()', "Loading ARES configuration from '"+configFile+"'...");
+	configStats = fs.lstatSync(configFile);
+	if (!configStats.isFile()) {
+		throw "Not a file: '"+configFile+"': ";
+	}
+
+	var configContent = fs.readFileSync(configFile, 'utf8');
+	try {
+		ide.res = JSON.parse(configContent);
+	} catch(e) {
+		throw "Improper JSON: "+configContent;
+	}
+
+	if (!ide.res.services || !ide.res.services[0]) {
+		throw "Corrupted '"+configFile+"': no storage services defined";
+	}
 }
 
-log("Loading ARES configuration from '"+configPath+"'...");
-var configStats = fs.lstatSync(configPath);
-if (!configStats.isFile()) {
-	throw "Not a file: '"+configPath+"': ";
+function getObjectType(object) {
+	return util.isArray(object) ? "array" : typeof object;
 }
 
-var configContent = fs.readFileSync(configPath, 'utf8');
-try {
-	ide.res = JSON.parse(configContent);
-} catch(e) {
-	throw "Improper JSON: "+configContent;
+function mergePluginConfig(service, newdata, configFile) {
+	log.verbose('mergePluginConfig()', "Merging service '" + (service.name || service.id) + "' to ARES configuration");
+	try {
+		for(var key in newdata) {
+			var srcType = getObjectType(service[key]);
+			var dstType = getObjectType(newdata[key]);
+
+			if (srcType === 'undefined') {
+				service[key] = newdata[key];
+			} else if (srcType !== dstType) {
+				throw "Incompatible elements '" + key + "'. Unable to merge " + configFile;
+			} else if (srcType === 'array') {
+				for(var idx = 0; idx < newdata[key].length; idx++) {
+					service[key].push(newdata[key][idx]);
+				}
+			} else if (srcType === 'object') {
+				for(var subkey in newdata[key]) {
+					log.verbose('mergePluginConfig()', "Adding or replacing " + subkey + " in " + key);
+					service[key][subkey] = newdata[key][subkey];
+				}
+			} else {
+				service[key] = newdata[key];
+			}
+		}
+
+		log.info('mergePluginConfig()', "Merged service: " + JSON.stringify(service, null, 2));
+	} catch(err) {
+		log.error('mergePluginConfig()', err);
+		throw "Unable to merge " + configFile;
+	}
 }
 
-if (!ide.res.services || !ide.res.services[0]) {
-	throw "Corrupted '"+configPath+"': no storage services defined";
+function appendPluginConfig(configFile) {
+	log.verbose('appendPluginConfig()', "Loading ARES plugin configuration from '"+configFile+"'...");
+	var pluginData;
+	var configContent = fs.readFileSync(configFile, 'utf8');
+	try {
+		pluginData = JSON.parse(configContent);
+	} catch(e) {
+		throw "Improper JSON in " + configFile + " : "+configContent;
+	}
+
+	pluginData.services.forEach(function(pluginData) {
+		if (serviceMap[pluginData.id]) {
+			mergePluginConfig(serviceMap[pluginData.id], pluginData, configFile);
+		} else {
+			log.verbose('appendPluginConfig()', "Adding new service '" + pluginData.name + "' to ARES configuration");
+			ide.res.services.push(pluginData);
+			serviceMap[pluginData.id] = pluginData;
+		}
+	});
 }
+
+function loadPluginConfigFiles() {
+
+	// Build a service map to merge the plugin services later on
+	ide.res.services.forEach(function(entry) {
+		serviceMap[entry.id] = entry;
+	});
+
+	// Find and load the plugins configuration, sorted in folder
+	// names lexicographical order.
+	var base = path.join(myDir, 'node_modules');
+	var directories = fs.readdirSync(base).sort();
+	directories.forEach(function(directory) {
+		var filename = path.join(base, directory, 'ide.json');
+		if (fs.existsSync(filename)) {
+			appendPluginConfig(filename);
+		}
+	});
+}
+
+loadMainConfig(configPath);
+loadPluginConfigFiles();
 
 // configuration age/date is the UTC configuration file last modification date
 ide.res.timestamp = configStats.atime.getTime();
-log(ide.res);
+log.verbose('main', ide.res);
 
 function handleMessage(service) {
 	return function(msg) {
 		if (msg.protocol && msg.host && msg.port && msg.origin && msg.pathname) {
 			service.dest = msg;
-			log("will proxy to service.dest:", service.dest);
+			log.info(service.id , m("will proxy to service.dest:", service.dest));
 			service.origin = 'http://' + argv.host + ':' + argv.port;
 			service.pathname = '/res/services/' + service.id;
-			
+
 			if (service.origin.match(/^https:/)) {
-				console.info("Service['"+service.id+"']: connect to <"+service.origin+"> to accept SSL certificate");
+				log.http(service.id, "connect to <"+service.origin+"> to accept SSL certificate");
 			}
+
+			var options = {
+				host:   service.dest.host,
+				port:   service.dest.port,
+				path:   '/config',
+				method: 'POST',
+				headers: {
+					'content-type': 'application/json'
+				}
+			};
+			var creq = http.request(options, function(cres) {
+				log.http(service.id, "POST /config response.status=" + cres.statusCode);
+			}).on('error', function(e) {
+				throw e;
+			});
+			creq.write(JSON.stringify({config: service}, null, 2));
+			creq.end();
 		} else {
-			console.error("Error updating URL for service "+service.id);
+			log.error(service.id, "Error updating service URL");
 		}
 	};
 }
 
-function serviceEcho(service) {
+function serviceOut(service) {
 	return function(data){
-		console.log("> Service['"+service.id+"']: "+data);
+		log.http(service.id, data.toString());
+	};
+}
+
+function serviceErr(service) {
+	return function(data){
+		log.warn(service.id, data.toString());
 	};
 }
 
 function handleServiceExit(service) {
 	return function(code, signal) {
 		if (signal) {
-			console.log("> Service['"+service.id+"']: killed (signal="+signal+")");
+			log.warn(service.id, "killed (signal="+signal+")");
 		} else {
-			console.error("*** Service['"+service.id+"']: abnormal exit (code="+code+")");
+			log.warn(service.id, "abnormal exit (code="+code+")");
 			if (service.respawn) {
-				console.error("*** Service['"+service.id+"']: respawning...");
+				log.warn(service.id, "respawning...");
 				startService(service);
 			} else {
-				console.error("*** Exiting...");
+				log.error('handleServiceExit()', "*** Exiting...");
 				process.exit(code);
 			}
 		}
 	};
 }
 
+function applyRegexp(data) {
+	for(var key in data) {
+		var pType = getObjectType(data[key]);
+		if (pType === 'string') {
+			data[key] = platformSubst(data[key]);
+		} else if (pType === 'array') {
+			applyRegexp(data[key]);
+		} else if (pType === 'object') {
+			applyRegexp(data[key]);
+		}	// else - Nothing to do
+	}
+}
+
 function startService(service) {
-	var command = platformSubst(service.command);
+	applyRegexp(service);		// Apply regexp to all properties
+	var command = service.command;
 	var params = [];
 	var options = {
 		stdio: ['ignore', 'pipe', 'pipe', 'ipc']
 	};
 	service.params.forEach(function(inParam){
-		params.push(platformSubst(inParam));
+		params.push(inParam);
 	});
 	if (service.verbose) {
 		params.push('-v');
 	}
-	console.log("> Service['"+service.id+"']: executing '"+command+" "+params.join(" ")+"'");
+	log.info(service.id, "executing '"+command+" "+params.join(" ")+"'");
 	var subProcess = spawn(command, params, options);
-	subProcess.stderr.on('data', serviceEcho(service));
-	subProcess.stdout.on('data', serviceEcho(service));
+	subProcess.stderr.on('data', serviceErr(service));
+	subProcess.stdout.on('data', serviceOut(service));
 	subProcess.on('exit', handleServiceExit(service));
 	subProcess.on('message', handleMessage(service));
 	subProcesses.push(subProcess);
 }
 
 function proxyServices(req, res, next) {
-	log("req.params:", req.params, ", req.query:", req.query);
+	log.verbose('proxyServices()', m("req.params:", req.params, ", req.query:", req.query));
 	var query = {},
 	    id = req.params.serviceId,
 	    service = ide.res.services.filter(function(service) {
@@ -233,11 +386,11 @@ function proxyServices(req, res, next) {
 		// headers to send
 		headers: req.headers
 	};
-	log("options:", options);
+	log.verbose('proxyServices()', m("options:", options));
 
 	var creq = http.request(options, function(cres) {
 		// transmit every header verbatim, but cookies
-		log("cres.headers:", cres.headers);
+		log.verbose('proxyServices()', m("cres.headers:", cres.headers));
 		for (var key in cres.headers) {
 			var val = cres.headers[key];
 			if (key.toLowerCase() === 'set-cookie') {
@@ -260,8 +413,8 @@ function translateCookie(service, res, cookie) {
 	cookie.options.domain = ide.res.domain || '127.0.0.1';
 	var oldPath = cookie.options.path;
 	cookie.options.path = service.pathname + (oldPath ? oldPath : '');
-	log("cookie.path:", oldPath, "->", cookie.options.path);
-	log("set-cookie:", cookie);
+	log.silly('translateCookie()', m("cookie.path:", oldPath, "->", cookie.options.path));
+	log.silly('translateCookie()', m("set-cookie:", cookie));
 	res.cookie(cookie.name, cookie.value, cookie.options);
 }
 
@@ -273,7 +426,7 @@ function parseSetCookie(cookies) {
 	cookies.forEach(function(cookie) {
 		var outCookie = {};
 		var tokens = cookie.split(/; */);
-		log("parseSetCookie(): tokens:", tokens);
+		log.silly("parseSetCookie()", m("tokens:", tokens));
 		var namevalStr = tokens.splice(0, 1)[0];
 		if (typeof namevalStr === 'string') {
 			var nameval = namevalStr.split('=');
@@ -287,14 +440,25 @@ function parseSetCookie(cookies) {
 			if (typeof outCookie.options.expires === 'string') {
 				outCookie.options.expires = new Date(outCookie.options.expires);
 			}
-			log("parseSetCookie(): outCookie:", outCookie);
+			log.silly("parseSetCookie()", m("outCookie:", outCookie));
 			outCookies.push(outCookie);
 		} else {
-			log("parseSetCookie(): Invalid Set-Cookie header:", namevalStr);
+			log.silly("parseSetCookie()", m("Invalid Set-Cookie header:", namevalStr));
 		}
 	});
-	log("outCookies:", outCookies);
+	log.silly("parseSetCookie()", m("outCookies:", outCookies));
 	return outCookies;
+}
+
+function onExit() {
+	if (subProcesses.length > 0) {
+		log.info('onExit()', 'Terminating sub-processes...');
+		subProcesses.forEach(function(subproc) {
+			process.kill(subproc.pid, 'SIGINT');
+		});
+		subProcesses = [];
+		log.info('onExit()', 'Exiting...');
+	}
 }
 
 ide.res.services.filter(function(service){
@@ -307,13 +471,22 @@ ide.res.services.filter(function(service){
 
 // Start the ide server
 
-var enyojsRoot = path.resolve(__dirname,".");
-var app = express.createServer();
+var enyojsRoot = path.resolve(myDir,".");
 
-var port = parseInt(argv.port, 10);
-var addr = argv.host;
+var app, server;
+if (express.version.match(/^2\./)) {
+	// express-2.x
+	app = express.createServer();
+	server = app;
+} else {
+	// express-3.x
+	app = express();
+	server = http.createServer(app);
+}
 
 app.configure(function(){
+
+	app.use(express.favicon(__dirname + '/ares/assets/images/ares_48x48.ico'));
 
 	app.use('/ide', express.static(enyojsRoot + '/'));
 	app.use('/test', express.static(enyojsRoot + '/test'));
@@ -321,22 +494,25 @@ app.configure(function(){
 	app.use(express.logger('dev'));
 
 	app.get('/', function(req, res, next) {
-		log("GET /");
+		log.http('main', "GET /");
 		res.redirect('/ide/ares/');
 	});
 	app.get('/res/timestamp', function(req, res, next) {
 		res.status(200).json({timestamp: ide.res.timestamp});
 	});
 	app.get('/res/services', function(req, res, next) {
-		log("GET /res/services:", ide.res.services);
+		log.http('main', m("GET /res/services:", ide.res.services));
 		res.status(200).json({services: ide.res.services});
 	});
 	app.all('/res/services/:serviceId/*', proxyServices);
 	app.all('/res/services/:serviceId', proxyServices);
 
-});
+	if (tester) {
+		app.post('/res/tester', tester.setup);
+		app['delete']('/res/tester', tester.cleanup);
+	}
 
-app.listen(port, argv.listen_all ? null : addr);
+});
 
 // Run non-regression test suite
 
@@ -345,27 +521,16 @@ if (argv.runtest) {
 	page = "test.html";
 }
 
-// Open default browser
-
-var url = "http://" + addr + ":" + port + "/ide/ares/" + page;
-if (argv.browser) {
-	spawn(platformOpen[process.platform], [url]);
-} else {
-	console.log("Ares now running at <" + url + ">");
-}
-
-// Exit path
-
-console.info("Press CTRL + C to shutdown");
-
-process.on('uncaughtException', function (err) {
-	console.error(err.stack);
-	process.exit(1);
+server.listen(argv.port, argv.listen_all ? null : argv.host, null /*backlog*/, function () {
+	var tcpAddr = server.address();
+	var url = "http://" + (argv.host || "127.0.0.1") + ":" + tcpAddr.port + "/ide/ares/" + page;
+	if (argv.browser) {
+		// Open default browser
+		var info = platformOpen[process.platform] ;
+		spawn(info[0], info.slice(1).concat([url]));
+	} else {
+		log.http('main', "Ares now running at <" + url + ">");
+	}
 });
-process.on('exit', function () {
-	console.log('Terminating sub-processes...');
-	subProcesses.forEach(function(process) {
-		process.kill();
-	});
-	console.log('Exiting...');
-});
+
+log.info('main', "Press CTRL + C to shutdown");

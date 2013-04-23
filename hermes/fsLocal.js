@@ -5,12 +5,16 @@
  * and a working sample for other implementations.
  */
 
+// nodejs version checking is done in parent process ide.js
+
 var fs = require("fs"),
     path = require("path"),
     util  = require("util"),
     mkdirp = require("mkdirp"),
     async = require("async"),
     FsBase = require(__dirname + "/lib/fsBase"),
+    FdUtil = require(__dirname + "/lib/SimpleFormData"),
+    CombinedStream = require('combined-stream'),
     HttpError = require(__dirname + "/lib/httpError");
 
 function FsLocal(inConfig, next) {
@@ -75,20 +79,26 @@ FsLocal.prototype.get = function(req, res, next) {
 };
 
 FsLocal.prototype.mkcol = function(req, res, next) {
-	var newPath, newId,
+	var newPath, newId, newName, self = this,
 	    pathParam = req.param('path'),
 	    nameParam = req.param('name');
 	if (!nameParam) {
 		next(new HttpError("missing 'name' query parameter", 400 /*Bad-Request*/));
 		return;
 	}
-	newPath = path.join(pathParam, path.basename(nameParam));
+	newName = path.basename(nameParam);
+	newPath = path.join(pathParam, newName);
 	newId = this.encodeFileId(newPath);
 
 	fs.mkdir(path.join(this.root, newPath), function(err) {
 		next(err, {
 			code: 201, // Created
-			body: {id: newId, path: newPath, isDir: true}
+			body: {
+				id: newId,
+				path: self.normalize(newPath),
+				name: newName,
+				isDir: true
+			}
 		});
 	});
 };
@@ -117,11 +127,13 @@ FsLocal.prototype._propfind = function(err, relPath, depth, next) {
 		return;
 	}
 
-	var localPath = path.join(this.root, relPath);
+	var localPath = path.join(this.root, relPath),
+                        urlPath = this.normalize(relPath);
 	if (path.basename(relPath).charAt(0) ===".") {
 		// Skip hidden files & folders (using UNIX
 		// convention: XXX do it for Windows too)
-		return next();
+		next();
+		return;
 	}
 
 	fs.stat(localPath, (function(err, stat) {
@@ -131,9 +143,9 @@ FsLocal.prototype._propfind = function(err, relPath, depth, next) {
 
 		// minimum common set of properties
 		var node = {
-			path: relPath,
-			name: path.basename(relPath),
-			id: this.encodeFileId(relPath),
+			path: urlPath,
+			name: path.basename(urlPath),
+			id: this.encodeFileId(urlPath),
 			isDir: stat.isDirectory()
 		};
 
@@ -181,23 +193,88 @@ FsLocal.prototype._propfind = function(err, relPath, depth, next) {
 };
 
 FsLocal.prototype._getFile = function(req, res, next) {
-	var localPath = path.join(this.root, req.param('path'));
+	var relPath = req.param('path');
+	var localPath = path.join(this.root, relPath);
 	this.log("sending localPath=" + localPath);
-	fs.stat(localPath, function(err, stat) {
+	fs.stat(localPath, (function(err, stat) {
 		if (err) {
 			next(err);
 			return;
 		}
 		if (stat.isFile()) {
-			res.status(200);
-			res.sendfile(localPath);
-			// return nothing: streaming response
-			// is already in progress.
-			next();
+			this._propfind(err, relPath, 0 /*depth*/, function(err, node) {
+				res.setHeader('x-ares-node', JSON.stringify(node));
+				res.status(200);
+				res.sendfile(localPath);
+				// return nothing: streaming response
+				// is already in progress.
+				next();
+			});
 		} else {
-			next(new Error("not a file: '" + localPath + "'"));
+			if (stat.isDirectory() && req.param('format') === 'base64') {
+
+				// Return the folder content as a FormData filled with base64 encoded file content
+
+				var depthStr = req.param('depth');
+				var depth = depthStr ? (depthStr === 'infinity' ? -1 : parseInt(depthStr, 10)) : 1;
+				this.log("Preparing dir in base64, depth: " + depth + " " + localPath);
+				this._propfind(null, req.param('path'), depth, function(err, content){
+
+					// Build the multipart/formdata
+					var combinedStream = CombinedStream.create();
+					var boundary = FdUtil.generateBoundary();
+
+					var addFiles = function(entries) {
+						entries.forEach(function(entry) {
+							if (entry.isDir) {
+								addFiles(entry.children);
+							} else {
+								var filename = entry.path.substr(content.path.length + 1);
+								var filepath = path.join(localPath, entry.path.substr(content.path.length));
+								// console.log("adding file: ", filename);
+
+								// Adding part header
+								combinedStream.append(function(nextDataChunk) {
+									nextDataChunk(FdUtil.getPartHeader(filename, boundary));
+								});
+								// Adding file data
+								combinedStream.append(function(nextDataChunk) {
+									fs.readFile(filepath, 'base64', function (err, data) {
+										if (err) {
+											next(new HttpError('Unable to read ' + filename, 500));
+											nextDataChunk('INVALID CONTENT');
+											return;
+										}
+										nextDataChunk(data);
+									});
+								});
+								// Adding part footer
+								combinedStream.append(function(nextDataChunk) {
+									nextDataChunk(FdUtil.getPartFooter());
+								});
+							}
+						});
+					};
+
+					addFiles(content.children);
+
+					// Adding last footer
+					combinedStream.append(function(nextDataChunk) {
+						nextDataChunk(FdUtil.getLastPartFooter(boundary));
+					});
+
+					// Send the files back as a multipart/form-data
+					res.status(200);
+					res.header('Content-Type', FdUtil.getContentTypeHeader(boundary));
+					res.header('X-Content-Type', FdUtil.getContentTypeHeader(boundary));
+					combinedStream.pipe(res);
+				});
+
+			} else {
+				next(new Error("not a file: '" + localPath + "'"));
+			}
 		}
-	});
+	}).bind(this));
 };
 
 // XXX ENYO-1086: refactor tree walk-down
@@ -237,17 +314,9 @@ FsLocal.prototype._rmrf = function(localPath, next) {
 	}).bind(this));
 };
 
-/**
- * Write a file in the filesystem
- * 
- * Invokes the CommonJs callback with the created {ares.Filesystem.Node}.
- * 
- * @param {Object} file contains mandatory #name property, plus either
- * #buffer (a {Buffer}) or #path (a temporary absolute location).
- * @param {Function} next a Common-JS callback
- */
-FsLocal.prototype.putFile = function(file, next) {
+FsLocal.prototype.putFile = function(req, file, next) {
 	var absPath = path.join(this.root, file.name),
+            urlPath = this.normalize(file.name),
 	    dir = path.dirname(absPath),
 	    encodeFileId = this.encodeFileId,
 	    node;
@@ -269,8 +338,9 @@ FsLocal.prototype.putFile = function(file, next) {
 		},
 		function(cb1) {
 			node = {
-				id: encodeFileId(file.name),
-				path: file.name,
+				id: encodeFileId(urlPath),
+				path: urlPath,
+				name: path.basename(urlPath),
 				isDir: false
 			};
 			cb1();
@@ -288,7 +358,7 @@ FsLocal.prototype._changeNode = function(req, res, op, next) {
 	    folderIdParam = req.param('folderId'),
 	    overwriteParam = req.param('overwrite'),
 	    srcPath = path.join(this.root, pathParam);
-	var dstPath, dstRelPath;
+	var dstPath, dstRelPath, srcNode;
 	if (nameParam) {
 		// rename/copy file within the same collection (folder)
 		dstRelPath = path.join(path.dirname(pathParam),
@@ -406,44 +476,39 @@ FsLocal.prototype._cpr = function(srcPath, dstPath, next) {
 if (path.basename(process.argv[1]) === "fsLocal.js") {
 	// We are main.js: create & run the object...
 	
-	var argv = require("optimist")
-	.usage('\nAres FileSystem (fs) provider.\nUsage: "$0 [OPTIONS]"')
-	.options('r', {
-		alias : 'root',
-		description: 'Root directory to serve'
-	})
-	.options('P', {
-		alias : 'pathname',
-		description: 'pathname (M) can be "/", "/res/files/" ...etc'
-	})
-	.demand('P')
-	.options('p', {
-		alias : 'port',
-		description: 'port (o) local IP port of the express server (default: 0 dynamic)',
-		default: '0'
-	})
-	.options('h', {
-		alias : 'help',
-		description: 'help message',
-		boolean: true
-	})
-	.options('v', {
-		alias : 'verbose',
-		description: 'verbose execution mode',
-		boolean: true
-	})
-	.argv;
-	
-	var version = process.version.match(/[0-9]+.[0-9]+/)[0];
-	if (version <= 0.7) {
-		process.exit("Only supported on Node.js version 0.8 and above");
+	var knownOpts = {
+		"root":		path,
+		"port":		Number,
+		"pathname":	String,
+		"level":	['silly', 'verbose', 'info', 'http', 'warn', 'error'],
+		"help":		Boolean
+	};
+	var shortHands = {
+		"r": "--root",
+		"p": "--port",
+		"P": "--pathname",
+		"l": "--level",
+		"v": "--level verbose",
+		"h": "--help"
+	};
+	var argv = require('nopt')(knownOpts, shortHands, process.argv, 2 /*drop 'node' & basename*/);
+	argv.pathname = argv.pathname || "/files";
+	argv.port = argv.port || 0;
+	argv.level = argv.level || "http";
+	if (argv.help) {
+		console.log("Usage: node " + basename + "\n" +
+			    "  -p, --port        port (o) local IP port of the express server (0: dynamic)         [default: '0']\n" +
+			    "  -P, --pathname    URL pathname prefix (before /deploy and /build                    [default: '/files']\n" +
+			    "  -l, --level       debug level ('silly', 'verbose', 'info', 'http', 'warn', 'error') [default: 'http']\n" +
+			    "  -h, --help        This message\n");
+		process.exit(0);
 	}
 
 	var fsLocal = new FsLocal({
+		root: argv.root,
 		pathname: argv.pathname,
 		port: argv.port,
-		verbose: argv.verbose,
-		root: argv.root
+		verbose: (argv.level === 'verbose') // FIXME: rather use npm.log() directly
 	}, function(err, service){
 		if (err) process.exit(err);
 		// process.send() is only available if the

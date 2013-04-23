@@ -1,24 +1,33 @@
 [submodule "enyo"]
 	path = enyo
-	url = ../enyo
+	url = ../../enyojs/enyo
 [submodule "lib/layout"]
 	path = lib/layout
-	url = ../layout
+	url = ../../enyojs/layout
 [submodule "lib/onyx"]
 	path = lib/onyx
-	url = ../onyx
+	url = ../../enyojs/onyx
 [submodule "lib/extra"]
 	path = lib/extra
-	url = ../extra
+	url = ../../enyojs/extra
 [submodule "lib/foss/backbone"]
 	path = lib/foss/backbone
 	url = ../../documentcloud/backbone.git
 [submodule "lib/foss/underscore"]
 	path = lib/foss/underscore
 	url = ../../documentcloud/underscore.git
-[submodule "hermes/node_modules/phonegapbuildapi"]
-	path = hermes/node_modules/phonegapbuildapi
-	url = ../phonegapbuildapi
+[submodule "node_modules/phonegapbuildapi"]
+	path = node_modules/phonegapbuildapi
+	url = ../../enyojs/phonegapbuildapi
 [submodule "lib/g11n"]
 	path = lib/g11n
-	url = ../g11n.git
+	url = ../../enyojs/g11n.git
+[submodule "node_modules/unzip"]
+	path = node_modules/unzip
+	url = ../../enyojs/node-unzip.git
+[submodule "lib/foss/ace-builds"]
+	path = lib/foss/ace-builds
+	url = ../../ajaxorg/ace-builds.git
+[submodule "node_modules/semver"]
+	path = node_modules/semver
+	url = ../../isaacs/node-semver.git

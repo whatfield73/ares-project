@@ -6,6 +6,8 @@ var fs = require("fs"),
     path = require("path"),
     express = require("express"),
     http = require("http"),
+    https = require("https"),
+    tunnel = require("tunnel"),
     util  = require("util"),
     temp = require("temp"),
     async = require("async"),
@@ -59,7 +61,7 @@ function FsBase(inConfig, next) {
 		}
 		this.app.use(this.cors.bind(this));
 		this.app.use(express.cookieParser());
-		this.app.use(this.authorize.bind(this));
+		this.app.use(this.pathname, this.authorize.bind(this));
 		this.app.use(express.methodOverride());
 		
 		this.app.use(this.dump.bind(this));
@@ -91,8 +93,21 @@ function FsBase(inConfig, next) {
 		}
 	}).bind(this));
 
-	// 3. Handle HTTP verbs
+	// outbound http/https traffic
+
+	this.httpAgent = null;
+	this.httpsAgent = null;
+
+	// 2. Dynamic configuration
 	
+	this.app.post('/config', (function(req, res, next) {
+		this.log("req.body:", req.body);
+		var config = req.body && req.body.config;
+		this.configure(config, function(err) {
+			res.status(200).end();
+		});
+	}).bind(this));
+
 	function makeExpressRoute(path) {
 		return (this.pathname + path)
 			.replace(/\/+/g, "/") // compact "//" into "/"
@@ -106,6 +121,8 @@ function FsBase(inConfig, next) {
 	this.app.get(this.route0, this.getUserInfo.bind(this));
 	this.app.post(this.route0, this.setUserInfo.bind(this));
 
+	// 3. Handle HTTP verbs
+	
 	// URL-scheme: ID-based file/folder tree navigation, used by
 	// HermesClient.
 	this.route1 = makeExpressRoute.bind(this)('/id/');
@@ -150,11 +167,13 @@ function FsBase(inConfig, next) {
 	// protocol, host, port, pathname) to the creator, when port
 	// is bound
 	this.server.listen(this.port, "127.0.0.1", null /*backlog*/, (function() {
-		this.port = this.server.address().port;
-		this.origin = "http://127.0.0.1:"+ this.port;
+		var tcpAddr = this.server.address();
+		this.host = tcpAddr.address;
+		this.port = tcpAddr.port;
+		this.origin = "http://" + this.host + ":"+ this.port;
 		return next(null, {
 			protocol: 'http',
-			host: '127.0.0.1',
+			host: this.host,
 			port: this.port,
 			origin: this.origin,
 			pathname: this.pathname
@@ -171,7 +190,14 @@ function FsBase(inConfig, next) {
 
 }
 
-// Middlewares
+// Configure -- one per fs instance
+
+FsBase.prototype.configure = function(config, next) {
+	this.log("FsBase.configure(): config:", config);
+	if (next) next();
+};
+
+// Middlewares -- one per session
 
 FsBase.prototype.separator = function(req, res, next) {
 	this.log("---------------------------------------------------------");
@@ -204,6 +230,20 @@ FsBase.prototype.cors = function(req, res, next) {
 // Utilities
 
 /**
+ * Normalize a path using only `/`, to make it usable in URL's
+ * @param {String} p the path to normalize
+ */
+if (process.platform === 'win32') {
+FsBase.prototype.normalize = function(p) {
+	return path.normalize(p).replace(/\\/g,'/');
+}
+} else {
+FsBase.prototype.normalize = function(p) {
+	return path.normalize(p);
+};
+}
+
+/**
  * Turns an {Error} object into a usable response {Object}
  * 
  * A response {Object} as #code and #body properties.  This method is
@@ -230,17 +270,31 @@ FsBase.prototype.errorResponse = function(err) {
  * Unified response handler
  * @param {Object} res the express response {Object}
  * @param {Object} err the error if any.  Can be any kind of {Error}, such as an { HttpError}
- * @param {Object} response is an {Object} that has 2 properties: #code (used as the HTTP statusCode) and #body (inlined in the response body, of not falsy)
+ * @param {Object} response is a response {Object}
+ * 
+ * A response {Object} has:
+ * 
+ * - Two mandatory properties: #code (used as the HTTP statusCode) and
+ * #body (inlined in the response body, of not falsy).
+ * - One optional #headers property is an {Object} of HTTP headers to
+ * be carried into the response message
  */
 FsBase.prototype.respond = function(res, err, response) {
 	this.log("FsBase.respond(): response:", response);
 	if (err) {
 		response = this.errorResponse(err);
 	}
+	if (response && response.headers) {
+		for (var h in Object.keys(response.headers)) {
+			res.setHeader(h, response.headers);
+		}
+	}
 	if (response && response.body) {
 		res.status(response.code).send(response.body);
-	} else if (response && response.code) {
+	} else if (response) {
 		res.status(response.code).end();
+	} else {
+		this.log("FsBase.respond: response sent or being being sent");
 	}
 };
 
@@ -256,6 +310,29 @@ FsBase.prototype.decodeFileId = function(fileId) {
 	var buf = new Buffer(fileId, 'hex');
 	var filePath = buf.toString('utf-8');
 	return filePath;
+};
+
+FsBase.prototype.parseProxy = function(config) {
+	var self = this;
+	
+	this.httpAgent = _makeAgent('http', config);
+	this.httpsAgent = _makeAgent('https', config);
+	
+	function _makeAgent(protocol, config) {
+		var proxyConfig = config.proxy && config.proxy[protocol];
+		if (!proxyConfig) {
+			return undefined;
+		}
+		var tunnelConstructor = tunnel[protocol + proxyConfig.tunnel];
+		var agent;
+		if (proxyConfig && typeof tunnelConstructor == 'function') {
+			agent = tunnelConstructor({proxy: proxyConfig});
+			self.log("FsBase.parseProxy(): protocol:", protocol, "agent:", agent);
+		} else {
+			console.warning("FsBase.parseProxy(): protocol:", protocol, "invalid proxy configuration:", config.proxy, "will use default agent");
+		}
+		return agent;
+	}
 };
 
 // Actions
@@ -330,10 +407,10 @@ FsBase.prototype._putWebForm = function(req, res, next) {
 		next(new HttpError("Missing 'path' request parameter", 400 /*Bad Request*/));
 		return;
 	}
-	if (nameParam) {
-		relPath = pathParam + '/' + nameParam;
-	} else {
+	if (nameParam === '.'|| !nameParam) {
 		relPath = pathParam;
+	} else {
+		relPath = [pathParam, nameParam].join('/');
 	}
 
 	// Now get the bits: base64-encoded binary in the
@@ -346,16 +423,22 @@ FsBase.prototype._putWebForm = function(req, res, next) {
 		buf = new Buffer('');
 	}
 	
-	this.log("FsBase.putWebForm(): storing file as", relPath);
-	fileId = this.encodeFileId(relPath);
-	this.putFile({
+	var urlPath = this.normalize(relPath);
+	this.log("FsBase.putWebForm(): storing file as", urlPath);
+	fileId = this.encodeFileId(urlPath);
+	this.putFile(req, {
 		name: relPath,
 		buffer: buf
 	}, (function(err){
 		this.log("FsBase.putWebForm(): err:", err);
 		next(err, {
 			code: 201, // Created
-			body: [{id: fileId, path: relPath, isDir: false}]
+			body: [{
+				id: fileId,
+				path: urlPath,
+				name: path.basename(urlPath),
+				isDir: false
+			}]
 		});
 	}).bind(this));
 };
@@ -374,9 +457,9 @@ FsBase.prototype._putWebForm = function(req, res, next) {
  */
 FsBase.prototype._putMultipart = function(req, res, next) {
 	var pathParam = req.param('path');
-	this.log("FsBase.putMultipart(): req.files:", req.files);
-	this.log("FsBase.putMultipart(): req.body:", req.body);
-	this.log("FsBase.putMultipart(): pathParam:", pathParam);
+	//this.log("FsBase.putMultipart(): req.files:", req.files);
+	//this.log("FsBase.putMultipart(): req.body:", req.body);
+	//this.log("FsBase.putMultipart(): pathParam:", pathParam);
 	if (!req.files.file) {
 		next(new HttpError("No file found in the multipart request", 400 /*Bad Request*/));
 		return;
@@ -406,24 +489,69 @@ FsBase.prototype._putMultipart = function(req, res, next) {
 		}
 	}
 
-	this.log("FsBase.putMultipart(): files", files);
+	//this.log("FsBase.putMultipart(): files", files);
 
 	var nodes = [];
-	async.forEach(files, (function(file, cb) {
-		if (pathParam) {
-			file.name = pathParam + '/' + file.name;
+	async.forEachSeries(files, (function(file, cb) {
+
+		if (file.name === '.' || !file.name) {
+			file.name = pathParam;
+		} else {
+			file.name = [pathParam, file.name].join('/');
 		}
-		this.putFile(file, (function(err, node) {
-			this.log("FsBase.putMultipart(): node:", node);
-			nodes.push(node);
-			this.log("FsBase.putMultipart(): nodes:", nodes);
+
+		var putCallback = function(err, node) {
+			this.log("FsBase.putMultipart(): err:", err, "node:", node);
+			if (err) {
+				cb(err);
+			} else if (node) {
+				nodes.push(node);
+			}
 			cb();
-		}).bind(this));
-	}).bind(this), function(err){
+		};
+
+		if (file.type.match(/x-encoding=base64/)) {
+			fs.readFile(file.path, function(err, data) {
+				if (err) {
+					console.log("transcoding: error" + file.path, err);
+					cb(err);
+					return;
+				}
+				try {
+					var fpath = file.path;
+					delete file.path;
+					fs.unlink(fpath, function(err) { /* Nothing to do */ });
+					file.buffer = new Buffer(data.toString('ascii'), 'base64');			// TODO: This works but I don't like it
+
+					this.putFile(req, file, putCallback.bind(this));
+				} catch(transcodeError) {
+					console.log("transcoding error: " + file.path, transcodeError);
+					cb(transcodeError);
+				}
+			}.bind(this));
+		} else {
+			this.putFile(req, file, putCallback.bind(this));
+		}
+	}).bind(this), (function(err){
+		this.log("FsBase.putMultipart(): nodes:", nodes);
 		next(err, {
 			code: 201, // Created
 			body: nodes
 		});
-	});
+	}).bind(this));
+};
+
+/**
+ * Write a file in the filesystem
+ * 
+ * Invokes the CommonJs callback with the created {ares.Filesystem.Node}.
+ * 
+ * @param {Object} req the express request context
+ * @param {Object} file contains mandatory #name property, plus either
+ * #buffer (a {Buffer}) or #path (a temporary absolute location).
+ * @param {Function} next a Common-JS callback
+ */
+FsBase.prototype.putFile = function(req, file, next) {
+	next (new HttpError("ENOSYS", 500));
 };
 

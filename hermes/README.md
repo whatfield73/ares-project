@@ -16,16 +16,16 @@ Hermes offers several services not available in a Web Browser through one (or se
 
 #### Verbs
 
-Hermes file-system providers use verbs that closely mimic the semantics defined by [WebDAV (RFC4918)](http://tools.ietf.org/html/rfc4918):  although Hermes reuses the same HTTP verbs (`GET`, `PUT`, `PROPFIND`, `MKCOL`, `DELETE` ...), it differs in terms of carried data.  Many (if not most) of the HTTP clients implement only the `GET` and `POST` HTTP verbs:  Hermes uses the same HTTP Method Overrides as WebDAV usually do (tunnel every requests but `GET` into `POST` requests that include a special `_method` query parameter)
+Hermes file-system providers use verbs that closely mimic the semantics defined by [WebDAV (RFC4918)](http://tools.ietf.org/html/rfc4918):  although Hermes reuses the same HTTP verbs (`GET`, `PUT`, `PROPFIND`, `MKCOL`, `DELETE` ...), it differs in terms of carried data.  Many (if not most) of the HTTP clients implement only the `GET` and `POST` HTTP verbs:  Hermes uses [X-HTTP-Method-Overrides](http://fandry.blogspot.fr/2012/03/x-http-header-method-override-and-rest.html) as WebDAV usually does.  As a potential security hole (enforced by Express), Ares does **not** support  the special `_method` query parameter .
 
 * `PROPFIND` lists properties of a resource.  It recurses into the collections according to the `depth` parameter, which may be 0, 1, … etc plus `infinity`.  For example, the following directory structure:
 
-		$ tree 1/
-		1/
-		├── 0
-		└── 1
+		$ tree dir1/
+		dir1/
+		├── file0
+		└── file1
 
-… corresponds to the following JSON object (multi-level node descriptor) returned by `PROPFIND`.
+… corresponds to the following JSON object (multi-level node descriptor) returned by `PROPFIND`.  The node descriptor Object format is defined by [this JSON schema](../assets/schema/com.enyojs.ares.fs.node.schema.json).  The `path` property is node location absolute to the Hermes file-system server root:  it uses URL notation: UNIX-type folder separator (`/`), not Windows-like (`\\`).
 
 		$ curl "http://127.0.0.1:9009/id/%2F?_method=PROPFIND&depth=10"
 		{
@@ -34,40 +34,57 @@ Hermes file-system providers use verbs that closely mimic the semantics defined 
 		    "name": "", 
 		    "children": [
 		        {
-		            "isDir": false, 
-		            "path": "/0", 
-		            "name": "0", 
-		            "id": "%2F0"
+		            "isDir": true, 
+		            "path": "/dir1", 
+		            "name": "dir1", 
+		            "id": "12efa4560"
+		            "children": [
+		                {
+		                    "isDir": false, 
+		                    "path": "/dir1/file0", 
+		                    "name": "file0", 
+		                    "id": "12efab780"
+		                }, 
+		                {
+		                    "isDir": false, 
+		                    "path": "/dir1/file1", 
+		                    "name": "file1", 
+		                    "id": "0ae12ef56"
+		                }
+		            ]
 		        }, 
-		        {
-		            "isDir": false, 
-		            "path": "/1", 
-		            "name": "1", 
-		            "id": "%2F1"
-		        }
 		    ], 
-		    "id": "%2F"
+		    "id": "934789346956340",
+		    "versionTag": "af34ef45",
 		}
 
 * `MKCOL` create a collection (a folder) into the given collection, as `name` passed as a query parameter (and therefore URL-encoded).  It returns a JSON-encoded single-level (depth=0) node descriptor of the new folder.
 
 		$ curl -d "" "http://127.0.0.1:9009/id/%2F?_method=MKCOL&name=tata"
 
+* `GET` can be used:
+    * ***`On files:`*** to get the content of a particular file.  
+    The optional query parameter `versionTag` comes from a previous call to `GET` on the same file.  	The HTTP header `x-ares-node` (lowecase) contains a JSON-encoded version of the file's node descriptor (the one returned by `PROPFIND` for this file).
+    * ***`On folders:`*** to get the content of all the files of the folder encoded in base64 into a single FormData.  
+    An additional query parameter "format" set to "base64" is expected. An error will be returned if this "format" query parameter is not present or is not equal to "base64".  
+    Other encoding may be added later on.
+
+	
 * `PUT` creates or overwrite one or more file resources, provided as `application/x-www-form-urlencoded` or `multipart/form-data`.  It returns a JSON-encoded array of single-level (depth=0) node descriptors for each uploaded files.
   * `application/x-www-form-urlencoded` contains a single base64-encoded file in the form field named `content`.  The file name and location are provided by `{id}` and optionally `name` query parameter.
   * `multipart/form-data` follows the standard format.  For each file `filename` is interpreted relativelly to the folder `{id}` provided in the URL.  **Note:** To accomodate an issue with old Firefox releases (eg. Firefox 10), fields labelled `filename` overwrite the `filename` in their corresponding `file` fields.  See `fsBase#_putMultipart()` for more details.
 
 * `DELETE` delete a resource (a file), which might be a collection (a folder).  Status codes:
-  * `200/OK` success, resource successfully removed.  The method returns the new status (`PROPFIND`) of the parent of the deleted resource.
+  * `200/OK` success, resource successfully removed.  The method returns the new node descriptor (as `PROPFIND` would return) of the parent of the deleted resource.
 
 		$ curl -d "" "http://127.0.0.1:9009/id/%2Ftata?_method=DELETE"
 
-* `COPY` reccursively copies a resource as a new `name` or `path` provided in the query string (one of them is required).  The optionnal query parameter `overwrite` defines whether the `COPY` should try to overwrite an existing resource or not.  The method returns the new status (`PROPFIND`) of the target resource.
+* `COPY` reccursively copies a resource as a new `name` or `folderId` provided in the query string (one of them is required, only one is taken into account, `name` takes precedence if both are provided in the query-string).  The optionnal query parameter `overwrite` defines whether the `COPY` should try to overwrite an existing resource or not.  The method returns the node descriptor (as `PROPFIND` would return) of the new resource.
   * `201/Created` success, a new resource is created
   * `200/Ok` success, an existing resource was successfully overwritten (query parameter `overwrite` was set to `true`)
   * `412/Precondition-Failed` failure, not allowed to copy onto an exising resource
 
-* `MOVE` has the exact same parameters and return codes as `COPY`
+* `MOVE` has the exact same parameters and return code & value as `COPY`
 
 #### Parameters
 
@@ -103,8 +120,6 @@ For more detailled instructions, refer to the [Mocha home page](http://visionmed
 
 ### Dropbox
 
-**Note:** Dropbox implementation as a back-end is nowhere near to be complete:  currently, only the authentication & authorization is complete, and we have a first version of the `PROPFIND` verb without any caching.
-
 Ares comes with an Hermes service using your Dropbox account as a storage service.    Enable this service in the `ide.json` before starting the IDE server:
 
 	[…]
@@ -134,6 +149,23 @@ In order to use Dropbox as storage service for Ares, you need to [create an Ares
 **NOTE:** While Chrome & Firefox will notify you of a blocked popup (hence allowing you to explicitly un-block it), Safari users will need to explicitly allow every popups (unless there is s smarter way  am not aware of) using _Safari_ > _Preferences_ > _Security_ > Un-check _Block pop-up windows_
 
 **NOTE:** Ares gives 20 seconds to the browser to load the Dropbox authorization window & complete the procedure.  In case it takes longer, please press _Renew_ again:  another immediate attempt will be faster as the page will be partially available from the browser cache.
+
+Ares Dropbox connector works behind an enterprise HTTP/HTTPS proxy, thanks to the [GitHub:node-tunnel](https://github.com/koichik/node-tunnel) library.  `fsDropbox` proxy configuration embeds a `node-tunnel` configuration.  For example, fellow-HP-ers can use the below (transform `Xproxy` into `proxy` in the sample ide.json):
+
+			[…]
+			"proxy":{
+				"http":{
+					"tunnel":"OverHttp",
+					"host":"web-proxy.corp.hp.com",
+					"port":8080
+				},
+				"https":{
+					"tunnel":"OverHttp",
+					"host":"web-proxy.corp.hp.com",
+					"port":8080
+				}
+			},
+			[…]
 
 ## Archive service
 
@@ -167,6 +199,120 @@ The generated file is expected to look like to below:
 	 --------                   -------
 	     4068                   2 files
 
+## Project template service
+
+The service "***genZip***" allows to intanciate new Ares project from project templates such as "**[bootplate](https://github.com/enyojs/enyo/wiki/Bootplate)**" or any customer specific project templates.
+These project templates can be defined:  
+
+* in "ide.json" of ares-project  
+* or in "ide.json" of Ares plugins  
+
+
+`IMPORTANT:` See [Project template configuration](#project-template-config) and [Merging Ares plugin configuration](../README.md#merging-configuration) for more information.
+
+### [Project template configuration](id:project-template-config)
+
+The property `projectTemplateRepositories` of the service "**genZip**" lists the template definitions that are available at project creation time.
+
+The property `projectTemplateRepositories` of the service "**genZip**" is defined in the "***ide.json***" of ares-project.
+
+		{
+			"id":"genZip",
+			"projectTemplateRepositories": {
+				"bootplate": {
+					"description": "Standard Enyo template",
+					"url": "http://enyojs.com/archive/ares-project-templates.json"
+				}
+			},
+			...
+		}
+
+The `url` property above can either be an http url or a an absolute filename such as:  
+NB: @INSTALLDIR@, @HOME@, … will be subsituted by the right value when "node ide.js" is started.
+
+	"url": "@INSTALLDIR@/templates/projects/ares-project-templates.json"
+
+Ares plugins can add or modify this list of templates.
+
+		{
+			"id": "genZip",
+			"projectTemplateRepositories": {
+				"bootplate": {
+				},
+				"my-templates": {
+					"url": "http://xyz.com/my-templates.json",
+					"description": "My Templates"
+				}
+	        }
+		}
+
+As a result, `"bootplate": {}` will remove the entry defined in ide.js of ares-project and `"my-templates": { "url" : "http://xyz.com/my-templates.json", …}` will add a new list of templates named 'my-templates'.
+
+### [Project template definition](id:project-template-definition)
+
+A project template definition (defined by the property `url` in `projectTemplateRepositories` must respect the json schema [com.enyojs.ares.project.templates.schema.json](../assets/schema/com.enyojs.ares.project.templates.schema.json).
+
+The compliance of a project template definition file with the json schema is not yet enforced but could be checked via [http://jsonschemalint.com/](http://jsonschemalint.com/).
+
+	[
+	  {
+	    "id": "bootplate-2.2.0",
+	    "zipfiles": [
+	      {
+	        "url": "bootplate-2.2.0.zip",
+	        "alternateUrl": "http://enyojs.com/archive/bootplate-2.2.0.zip",
+	        "prefixToRemove": "bootplate",
+	        "excluded": [
+	          "bootplate/api"
+	        ]
+	      },
+	   	  {
+	   	  	"url": ...
+	   	  }
+	    ],
+	    "description": "Enyo bootplate 2.2.0"
+	  },
+	  {
+	  	"id": ...
+	  }
+	]
+
+Each project definition defined by `id` can reference **several zip files** defined in the array `zipfiles`. The zip files are extracted in the order they are specified.  
+
+Each zip file entry:
+
+* must define an `url` and optionally an `alternateUrl`. The `url` is tried first and can refer to either:
+
+	* a file stored locally on the filesystem.  
+	NB: the filename must be relative to the directory where the project templates definition file is stored (See property `url` in `projectTemplateRepositories` above).  
+
+	* or an http url.
+	
+	If the `url` references a file which does not exist the `alternateUrl` is used.
+
+* can define a `prefixToRemove`. This prefix must correspond to one or several directory level that must be removed.
+* can define in the array `excluded` a list of files or directories to be excluded when the zip file is extracted.
+
+### Protocol
+
+
+#### Resources
+
+The default `<pathname>` value is `/genzip`.  Its value can be changed using the `-P` paraemter in the main `ide.json` configuration file.
+
+* `<pathname>/templates`:
+	* `GET` returns a JSON-encoded array of all the available project templates.
+* `<pathname>/template-repos/:repo-id`:
+	* `POST` creates a new repo entry with the key `repo-id`. The POST body must contain the `url` of the new project template repository.
+* `<pathname>/generate`:
+	* `POST` returns a FormData containing all the files, encoded in base64, of the selected project template.  
+		* The POST body must contain:
+			* the `templateId` of the selected project template.  
+			* the `substitutions` needed as a JSON stringified object.
+		* It's up to the caller to extract and base64 decode the files to create a new project.  
+		In Ares, this is achieved by forwarding the FormData to Hermes filesystem service via a PUT method.
+
+
 ## PhoneGap build service
 
 The entire [build.phonegap.com API](https://build.phonegap.com/docs/api) is wrapped by a dedicated Hermes build service named `bdPhoneGap`.  Reasons are:
@@ -177,6 +323,7 @@ The entire [build.phonegap.com API](https://build.phonegap.com/docs/api) is wrap
 		XMLHttpRequest cannot load https://build.phonegap.com/token.
  		Origin http://127.0.0.1 is not allowed by Access-Control-Allow-Origin.
 
+**Note:** Ares PhoneGap Build connector does _not_ work behind an HTTP/HTTPS proxy yet.
 
 ### Protocol
 

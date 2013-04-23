@@ -1,6 +1,5 @@
 /**
- * This kind provide a widget to tune project properties (phonegap
- * stuff included).
+ * This kind provide a widget to tune project properties
  *
  * By default, this widget is tuned for project modification.  In case
  * of project *creation*, the method setupCreate must be called after
@@ -17,123 +16,182 @@ enyo.kind({
 		onSaveGeneratedXml: "",
 		onDone: ""
 	},
-	createMode: true,
 
 	components: [
 		{kind: "onyx.RadioGroup", onActivate: "switchDrawers", name: "thumbnail", components: [
-			{content: "Project", active: true, attributes: {title: 'project attributes...'}},
-			{content: "PhoneGap", name: "phonegapTab", attributes: {title: 'phonegap build parameters...'}, showing: false},
-			{content: "Preview", attributes: {title: 'project preview parameters...'}}
+			{content: "Project", serviceId: "project", active: true, attributes: {title: 'project attributes...'}},
+			{content: "Preview", serviceId: "preview", attributes: {title: 'project preview parameters...'}}
 		]},
-		{name: "projectDrawer", kind: "onyx.Drawer", open:true, components: [
-			{tag: 'table', components: [
-				{tag: "tr" , components: [
-					 {tag: "td" , content: "Name: "},
-					 {tag: 'td', components:[
-						  {kind: "onyx.InputDecorator", components: [
-							   {kind: "Input", defaultFocus: true, name: "projectName"}
-						  ]}
-					 ]},
-					 {tag: 'td', content: "Title: "},
-					 {tag: "td" , components: [
-						  {kind: "onyx.InputDecorator", components: [
-							   {kind: "Input", defaultFocus: true, name: "projectTitle"}
-						   ]}
-					  ]}
-				]},
-				{tag: "tr" , components: [
-					 {tag: "td" , content: "Version: "},
-					 {tag: 'td', components:[
-						  {kind: "onyx.InputDecorator", components: [
-							   {kind: "Input", defaultFocus: true, name: "projectVersion"}
-						  ]}
-					 ]},
-					 {tag: 'td', content: "Id: "},
-					 {tag: "td" , components: [
-						  {kind: "onyx.InputDecorator", components: [
-							   {kind: "Input", defaultFocus: true, name: "projectId",
-								attributes: {title: "Application ID in reverse domain-name format: com.example.apps.myapp"}}
-						   ]}
-					  ]}
-				]},
-				{tag: "tr" , components: [
-					 {tag: "td" , content: "Author name: "},
-					 {tag: 'td', attributes: {colspan: 1}, components:[
-						  {kind: "onyx.InputDecorator", components: [
-							   {kind: "Input", name: "projectAuthor",
-								attributes: {title: "Vendor / Committer Name"}
-							   }
-						   ]}
-					 ]},
-					 {tag: "td" , content: "Contact: "},
-					 {tag: 'td', attributes: {colspan: 2}, components:[
-						  {kind: "onyx.InputDecorator", components: [
-							   {kind: "Input", name: "projectContact",
-								attributes: {title: "mail address or home page of the author"}
-							   }
-						   ]}
-					 ]}
-				]},
-				{tag: "tr" , name:'directoryEntry', canGenerate:false, components: [
-					 {tag: "td", content: "Directory: "},
-					 {tag: 'td', attributes: {colspan: 3}, content: "", name: "projectDirectory" }
-				]}
-			]},
-			{kind: "enyo.FittableColumns", components: [
-				{components: [
-					{tag: "span", content: "PhoneGap Build:"},
-					{name: "phonegapCheckBox", kind: "onyx.Checkbox", onchange: "togglePhoneGap"}
-				]}
-			]},
-			{kind: "enyo.FittableColumns", components: [
-				{kind: "Control", content: "Template:"},
-				{kind: "onyx.PickerDecorator", fit: true, components: [
-					{name: "templateButton", kind: "onyx.PickerButton", fit: true},
-					{kind: "onyx.FlyweightPicker", name: "templatePicker", components: [
-						{name: "template"}
-					], onSetupItem: "templateSetupItem", onSelect: "templateSelected"}
-				]}
-			]}
-		]},
-
-		{name: "phonegapDrawer", kind: "onyx.Drawer", open: false, components: [
-			{kind: "PhoneGap.ProjectProperties", name: "phonegap"}
-		]},
-
-		{name: "previewDrawer", kind: "onyx.Drawer", open: false, components: [
-			{tag: 'table', components: [
-				{tag: "tr" , components: [
-					{tag: "td" , content: "top application file: "},
-					{tag: 'td', attributes: {colspan: 1}, components:[
+		{name: "projectDrawer", kind: "onyx.Drawer", open:true, components: [		
+			{kind:"FittableColumns", components: [
+				{kind:"FittableRows", components: [
+					{classes: "ares-row", components: [
+						{tag:"label", classes : "ares-fixed-label", content: "Name: "},
 						{kind: "onyx.InputDecorator", components: [
-							{kind: "Input", name: "ppTopFile",
-							attributes: {title: 'top file of your application. Typically index.html'}
-							}
+							{kind: "Input", defaultFocus: true, name: "projectName"}
 						]}
+					]},
+					{classes: "ares-row", components: [
+						{tag:"label", classes : "ares-fixed-label", content:"Version: "},
+						{kind: "onyx.InputDecorator", components: [
+							{kind: "Input", defaultFocus: true, name: "projectVersion"}
+						]}
+					]},
+					{classes: "ares-row", components: [
+						{tag:"label", classes : "ares-fixed-label", content:"Author name: "},
+					  	{kind: "onyx.InputDecorator", components: [
+						   {kind: "Input", name: "projectAuthor", attributes: {title: "Vendor / Committer Name"}}
+					  	]}
+
+					]},
+					{classes:"ares-row", name: "templatesEntry", showing: false, components: [
+						{tag:"label", classes:"ares-fixed-label", content:"Template:"},
+						{kind: "onyx.PickerDecorator", fit: true, components: [
+							{name: "templateButton", classes:"ares-fixed-input", kind: "onyx.PickerButton", fit: true},
+							{kind: "onyx.FlyweightPicker", name: "templatePicker", components: [
+								{name: "template"}
+							], onSetupItem: "templateSetupItem", onSelect: "templateSelected"}
+						]}
+					]}
+				]},
+				{kind:"FittableRows", components: [
+					{classes: "ares-row", components: [
+						{tag:"label", classes : "ares-fixed-label", content: "Title: "},
+				  		{kind: "onyx.InputDecorator", components: [
+					   		{kind: "Input", defaultFocus: true, name: "projectTitle"}
+				   		]}
+					]},
+					{classes: "ares-row", components: [
+						{tag:"label", classes : "ares-fixed-label", content:"Id: "},
+				  		{kind: "onyx.InputDecorator", components: [
+					   		{kind: "Input", defaultFocus: true, name: "projectId",
+							attributes: {title: "Application ID in reverse domain-name format: com.example.apps.myapp"}}
+				   		]}
+					]},
+					{classes: "ares-row", components: [
+						{tag:"label", classes : "ares-fixed-label", content:"Contact: "},
+					   	{kind: "onyx.InputDecorator", components: [
+						   {kind: "Input", name: "projectContact",
+							attributes: {title: "mail address or home page of the author"}
+						   }
+					   ]}
+					]}
+				]}				
+			]},
+			{name:'directoryEntry', canGenerate:false, components: [
+				 {content: "Directory: "},
+				 {content: "", name: "projectDirectory" }
+			]},
+			{tag:"p", classes:"break"},
+			{kind: "enyo.FittableColumns", classes:"ares-row", name: "servicesList"},
+		]},
+		{name: "previewDrawer", kind: "onyx.Drawer", open: false, components: [
+			{kind: 'FittableRows', components: [
+				{classes:"ares-row", components:[
+					{tag: "label" , classes:"ares-fixed-label", content: "Top application file: "},
+					{kind: "onyx.InputDecorator", components: [
+						{kind: "Input", name: "ppTopFile",
+							attributes: {title: 'top file of your application. Typically index.html'}
+						}
 					]}
 				]}
 			]}
 		]},
-
-		// FIXME: there should be an HTML/CSS way to avoid using FittableStuff...
-		{kind: "FittableRows", style: "margin-top: 10px; width: 100%", fit: true, components: [
+		{name: "toolbarId", classes: "ares-bordered-toolbar", kind: "onyx.Toolbar", components: [
 			{kind: "onyx.Button", classes: "onyx-negative", content: "Cancel", ontap: "doDone"},
 			{name: "ok", kind: "onyx.Button", classes: "onyx-affirmative", content: "OK", ontap: "confirmTap"}
 		]},
-
-		{kind: "Ares.ErrorPopup", name: "errorPopup", msg: "unknown error"}
+		{kind: "Ares.ErrorPopup", name: "errorPopup", msg: "unknown error"},
+		{kind: "Signals", onServicesChange: "handleServicesChange"}
 	],
 
 	debug: false,
 	templates: [],
 	TEMPLATE_NONE: "NONE",
 	selectedTemplate: undefined,
+
+	services: {},
+
+	/**
+	 * Receive the {onServicesChange} broadcast notification
+	 * @param {Object} inEvent.serviceRegistry
+	 */
+	handleServicesChange: function(inSender, inEvent) {
+		if (this.debug) this.log();
+		this.services = this.services || {};
+		inEvent.serviceRegistry.forEach(enyo.bind(this, function(inService) {
+			var service = {
+				id: inService.id,
+				name: inService.getName() || inService.getId(),
+				kind: inService.getProjectPropertiesKind && inService.getProjectPropertiesKind()
+			};
+			if (this.debug) this.log("service:", service);
+			if (service.kind) {
+				this.services[service.id] = service;
+			}
+		}));
+		if (this.debug) this.log("services:", this.services);
+		enyo.forEach(enyo.keys(this.services), function(serviceId) {
+			var service = this.services[serviceId];
+			var drawer = this.$[service.id + 'Drawer'] || this.createComponent({
+				name: service.id + 'Drawer',
+				kind: "onyx.Drawer",
+				open: false
+			},{addBefore: this.$.toolbarId});
+			service.panel = drawer.$[service.id] || drawer.createComponent({
+				name: service.id,
+				kind: service.kind
+			});
+			service.tab = this.$.thumbnail[service.id + 'Tab'] || this.$.thumbnail.createComponent({
+				name: service.id + 'Tab',
+				content: service.name,
+				serviceId: service.id,
+				showing: false
+			});
+			this.$.servicesList.createComponent({
+				name: service.id + 'Frame'
+			});
+			if (!service.frame) {
+				service.frame = this.$.servicesList.$[service.id + 'Frame'];
+				service.checkBox = service.frame.createComponent({
+					kind: 'onyx.Checkbox',
+					name: service.id + 'CheckBox',
+					onchange: 'toggleService',
+					serviceId: service.id
+				}, {
+					owner: this
+				});
+				service.frame.createComponent({
+					tag: 'label',
+					classes: 'ares-label',
+					content: service.name
+				});
+			}
+
+			// Take the project configuration into account
+			// to show the service or not
+			this.showService(serviceId);
+		}, this);
+	},
+	/**
+	 * Toggle a service panel
+	 */
+	toggleService: function(inSender, inEvent) {
+		var serviceId = inEvent.originator.serviceId,
+		    checked = inEvent.originator.checked;
+		this.log("serviceId:", serviceId, 'checked:', checked);
+		var service = this.services[serviceId];
+		if (service.tab) {
+			service.tab.setShowing(checked);
+		}
+	},
 	/**
 	 * Tune the widget for project creation
 	 */
 	setupCreate: function() {
 		//this.$.ok.setDisabled(true) ;
 		this.$.directoryEntry.show() ;
+		this.$.templatesEntry.show();
 	},
 
 	/**
@@ -142,6 +200,7 @@ enyo.kind({
 	setupModif: function() {
 		//this.$.ok.setDisabled(true) ;
 		this.$.directoryEntry.hide() ;
+		this.$.templatesEntry.hide();
 	},
 
 	/**
@@ -149,22 +208,11 @@ enyo.kind({
 	 */
 	switchDrawers: function(inSender, inEvent) {
 		if (inEvent.originator.active === true ) {
-			var status = {
-				project: false,
-				phonegap: false,
-				preview: false
-			} ;
-
-			status[inEvent.originator.getContent().toLowerCase()] = true ;
-
-			for (var drawer in status) {
-				this.$[drawer + 'Drawer'].setOpen(status[drawer]) ;
-			}
+			enyo.forEach(inEvent.originator.parent.children, function(tab) {
+				var activate = (tab.serviceId === inEvent.originator.serviceId);
+				this.$[tab.serviceId + 'Drawer'].setOpen(activate);
+			}, this);
 		}
-	},
-
-	togglePhoneGap: function(inSender, inEvent) {
-		this.$.phonegapTab.setShowing(inEvent.originator.checked);
 	},
 
 	/**
@@ -187,9 +235,11 @@ enyo.kind({
 		this.$.projectAuthor. setValue(conf.author.name || '') ;
 		this.$.projectContact.setValue(conf.author.href || '') ;
 
-		this.$.phonegapTab.setShowing(conf.build.phonegap.enabled);
-		this.$.phonegapCheckBox.setChecked(conf.build.phonegap.enabled);
-		this.$.phonegap.setProjectConfig(this.config.build.phonegap);
+		// Load each builder service configuration into its
+		// respective ProjectProperties panel
+		enyo.forEach(enyo.keys(this.services), function(serviceId) {
+			this.showService(serviceId);
+		}, this);
 
 		if (! conf.preview ) {conf.preview = {} ;}
 		this.$.ppTopFile.setValue(conf.preview.top_file);
@@ -197,10 +247,35 @@ enyo.kind({
 		return this ;
 	},
 
+	update: function(inData) {
+		var conf = this.config ;
+
+		enyo.forEach(enyo.keys(inData), function(key) {
+			conf[key] = inData[key];
+		});
+		this.$.projectId.     setValue(conf.id      || '' );
+		this.$.projectVersion.setValue(conf.version || '' );
+		this.$.projectTitle.  setValue(conf.title   || '' );
+
+		return this ;
+	},
+
+
+	showService: function(serviceId) {
+		var service = this.services[serviceId];
+		var config = this.config && this.config.build &&
+			    this.config.build[serviceId];
+		var enabled = config && config.enabled;
+		service.checkBox.setChecked(enabled);
+		service.tab.setShowing(enabled);
+		if (config) {
+			service.panel.setProjectConfig(config);
+		}
+	},
+
 	confirmTap: function(inSender, inEvent) {
 		var tglist, ppConf ;
 		// retrieve modified values
-		this.log('ok tapped') ;
 
 		this.config.id       = this.$.projectId     .getValue();
 		this.config.version  = this.$.projectVersion.getValue();
@@ -210,8 +285,13 @@ enyo.kind({
 		this.config.author.name = this.$.projectAuthor.getValue();
 		this.config.author.href = this.$.projectContact.getValue();
 
-		this.config.build.phonegap = this.$.phonegap.getProjectConfig();
-		this.config.build.phonegap.enabled = this.$.phonegapCheckBox.checked;
+		// Dump each builder service configuration panel into
+		// the project configuration.
+		enyo.forEach(enyo.keys(this.services), function(serviceId) {
+			var service = this.services[serviceId];
+			this.config.build[service.id] = service.panel.getProjectConfig();
+			this.config.build[service.id].enabled = service.checkBox.checked;
+		}, this);
 
 		ppConf = this.config.preview ;
 		ppConf.top_file = this.$.ppTopFile.getValue();
@@ -229,7 +309,6 @@ enyo.kind({
 		return true;
 	},
 	setTemplateList: function(templates) {
-		this.$.templateButton.applyStyle("width", "20em");
 		this.templates = [this.TEMPLATE_NONE];
 		enyo.forEach(templates, function(item) {
 			this.templates.push(item.id);

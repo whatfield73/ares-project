@@ -3,10 +3,12 @@
 	"Palette.css",
 	"Json.js",
 	"Serializer.js",
-	"Designer.js",
 	"Inspector.css",
 	"Inspector.js",
 	"ComponentView.js",
+	"ComponentView.css",
 	"InspectorConfig.js",
-	"Sandbox.js"
+	"Designer.js",
+	"designer.css",
+	"RPCCommunicator.js"
 );

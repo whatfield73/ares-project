@@ -17,7 +17,7 @@
 </selenese>
 <selenese>
 	<command>clickAt</command>
-	<target><![CDATA[id=ares_projectView_projectList_iconButton3]]></target>
+	<target><![CDATA[id=ares_projectView_projectList_importProjectButton]]></target>
 	<value><![CDATA[]]></value>
 </selenese>
 <selenese>
@@ -37,7 +37,7 @@
 </selenese>
 <selenese>
 	<command>assertTextPresent</command>
-	<target><![CDATA[server]]></target>
+	<target><![CDATA[root]]></target>
 	<value><![CDATA[]]></value>
 </selenese>
 <selenese>
@@ -122,7 +122,7 @@
 </selenese>
 <selenese>
 	<command>clickAt</command>
-	<target><![CDATA[ares_projectView_harmonia_hermesFileTree_deleteFileButton]]></target>
+	<target><![CDATA[id=ares_projectView_harmonia_hermesFileTree_deleteFileButton]]></target>
 	<value><![CDATA[]]></value>
 </selenese>
 <selenese>
@@ -132,7 +132,7 @@
 </selenese>
 <selenese>
 	<command>clickAt</command>
-	<target><![CDATA[ares_projectView_harmonia_hermesFileTree_deletePopup_button2]]></target>
+	<target><![CDATA[id=ares_projectView_harmonia_hermesFileTree_deletePopup_deleteDeleteButton]]></target>
 	<value><![CDATA[]]></value>
 </selenese>
 <selenese>
@@ -148,7 +148,7 @@
 <selenese>
 	<command>type</command>
 	<target><![CDATA[id=ares_projectView_harmonia_hermesFileTree_nameFilePopup_fileName]]></target>
-	<value><![CDATA[App1.js]]></value>
+	<value><![CDATA[App3.js]]></value>
 </selenese>
 <selenese>
 	<command>keyPress</command>
@@ -213,7 +213,7 @@
 <selenese>
 	<command>type</command>
 	<target><![CDATA[id=ares_projectView_harmonia_hermesFileTree_renamePopup_fileName]]></target>
-	<value><![CDATA[App2.js]]></value>
+	<value><![CDATA[App4.js]]></value>
 </selenese>
 <selenese>
 	<command>keyPress</command>

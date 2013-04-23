@@ -1,10 +1,10 @@
 /**
- * UI: PhoneGap pane in the ProjectProperties popup
+ * UI: Phonegap pane in the ProjectProperties popup
  * @name Phonegap.ProjectProperties
  */
 
 enyo.kind({
-	name: "PhoneGap.ProjectProperties",
+	name: "Phonegap.ProjectProperties",
 	debug: false,
 	published: {
 		config: {}
@@ -13,28 +13,25 @@ enyo.kind({
 		onConfigure: ""
 	},
 	components: [
-		{tag: 'table', components: [
-			{tag: "tr" , components: [
-				{tag: "td" , content: "AppId: "},
-				{tag: 'td', attributes: {colspan: 1}, components:[
-					{kind: "onyx.InputDecorator", components: [
-						{kind: "Input", name: "pgConfId",
-						 attributes: {title: "unique identifier, assigned by build.phonegap.com"}
-						}
-					]}
+		{kind: "FittableRows", components: [
+			{classes:"ares-row", components :[
+				{tag:"label", classes: "ares-label", content: "AppId:"},
+				{kind: "onyx.InputDecorator", components: [
+					{kind: "Input", name: "pgConfId",
+						attributes: {title: "unique identifier, assigned by build.phonegap.com"}
+					}
 				]},
-				{tag: "td" , content: "Icon URL: "},
-				{tag: 'td', attributes: {colspan: 2}, components:[
-					{kind: "onyx.InputDecorator", components: [
-						{kind: "Input", name: "pgIconUrl",
-						 attributes: {title: "Relative location of the application icon. Defaults to Enyo icon."}
-						}
-					]}
+				{tag:"label", classes: "ares-label", content: "Icon URL:"},
+				{kind: "onyx.InputDecorator", components: [
+					{kind: "Input", name: "pgIconUrl",
+						attributes: {title: "Relative location of the application icon. Defaults to Enyo icon."}
+					}
 				]}
 			]}
 		]},
+
 		{content: "Targets:", components: [
-			{kind: "FittableColumns", components: [
+			{ kind: "onyx.Toolbar", classes: "ares-toolbar", components: [
 				{kind: "onyx.Button", content: "Refresh...", ontap: "refresh"},
 				{kind: "onyx.Button", content: "Configure", ontap: "configure"}
 			]}
@@ -46,11 +43,12 @@ enyo.kind({
 	 */
 	create: function() {
 		this.inherited(arguments);
-		this.targets = PhoneGap.ProjectProperties.platforms;
+		this.targets = Phonegap.ProjectProperties.platforms;
 		enyo.forEach(this.targets, function(target) {
 			this.$.targetsRows.createComponent({
 				name: target.id,
-				kind: "PhoneGap.ProjectProperties.Target",
+				classes:"ares-row",
+				kind: "Phonegap.ProjectProperties.Target",
 				targetId: target.id,
 				targetName: target.name,
 				enabled: false
@@ -70,7 +68,6 @@ enyo.kind({
 		enyo.forEach(this.targets, function(target) {
 			this.$.targetsRows.$[target.id].setProjectConfig(this.config.targets[target.id]);
 		}, this);
-
 		this.refresh();
 	},
 	getProjectConfig: function() {
@@ -80,7 +77,7 @@ enyo.kind({
 		enyo.forEach(this.targets, function(target) {
 			this.config.targets[target.id] = this.$.targetsRows.$[target.id].getProjectConfig();
 		}, this);
-
+		
 		if (this.debug) this.log("config:", this.config);
 		return this.config;
 	},
@@ -89,7 +86,8 @@ enyo.kind({
 	 */
 	refresh: function(inSender, inValue) {
 		if (this.debug) this.log("sender:", inSender, "value:", inValue);
-		PhoneGap.ProjectProperties.getProvider().authorize(enyo.bind(this, this.loadKeys));
+		var provider = Phonegap.ProjectProperties.getProvider();
+		provider.authorize(enyo.bind(this, this.loadKeys));
 	},
 	/**
 	 * @protected
@@ -106,7 +104,7 @@ enyo.kind({
 		if (err) {
 			this.warn("err:", err);
 		} else {
-			var provider = PhoneGap.ProjectProperties.getProvider();
+			var provider = Phonegap.ProjectProperties.getProvider();
 			enyo.forEach(this.targets, function(target) {
 				this.$.targetsRows.$[target.id].loadKeys(provider);
 			}, this);
@@ -128,11 +126,11 @@ enyo.kind({
 });
 
 /**
- * This widget is aware of the differences between the PhoneGap Build targets.
+ * This widget is aware of the differences between the Phoneap Build targets.
  */
 enyo.kind({
-	name: "PhoneGap.ProjectProperties.Target",
-	debug: true,
+	name: "Phonegap.ProjectProperties.Target",
+	debug: false,
 	published: {
 		targetId: "",
 		targetName: "",
@@ -141,15 +139,11 @@ enyo.kind({
 		config: {}
 	},
 	components: [
-		{kind: "FittableColumns", components: [
-			{kind: "onyx.InputDecorator", components: [
-				{name: "targetChkBx", kind: "onyx.Checkbox", classes: "ares_projectview_check", onchange: "updateDrawer"},
-				{name: "targetLbl", content: ""},
-				{name: "targetDrw", orient: "h", kind: "onyx.Drawer", open: false, components: [
+			{name: "targetChkBx", kind: "onyx.Checkbox", onchange: "updateDrawer"},
+			{tag:"label", name: "targetLbl", classes:"ares-label", content: ""},
+			{name: "targetDrw", orient: "v", kind: "onyx.Drawer", open: false, components: [
 					
-				]}
 			]}
-		]}
 	],
 	/**
 	 * @private
@@ -211,7 +205,7 @@ enyo.kind({
 			if (keys) {
 				this.$.targetDrw.createComponent({
 					name: "keySelector",
-					kind: "PhoneGap.ProjectProperties.KeySelector",
+					kind: "Phonegap.ProjectProperties.KeySelector",
 					targetId: this.targetId,
 					keys: keys,
 					activeKeyId: (this.config && this.config.keyId)
@@ -231,9 +225,9 @@ enyo.kind({
 });
 
 enyo.kind({
-	name: "PhoneGap.ProjectProperties.KeySelector",
-	debug: true,
-	kind: "FittableColumns", 
+	name: "Phonegap.ProjectProperties.KeySelector",
+	debug: false,
+	kind: "FittableRows",
 	published: {
 		targetId: "",
 		keys: undefined,
@@ -241,22 +235,24 @@ enyo.kind({
 		provider: undefined
 	},
 	components: [
-		{content: "Signing Key: "},
-		{name: "keyPicker", kind: "onyx.PickerDecorator", onSelect: "selectKey", components: [
-			{kind: "onyx.PickerButton", content: "Choose..."},
-			{kind: "onyx.Picker", name: "keys"}
-		]},
-		// android, ios & blackberry: key password
-		{kind: "onyx.InputDecorator", components: [
-			{content: "Key:"},
-			{name: "keyPasswd", kind: "onyx.Input", type: "password", placeholder: "Password..."}
-		]},
-		// android-only: keystore password
-		{kind: "onyx.InputDecorator", name: "keystorePasswdFrm", showing: false, components: [
-			{content: "Keystore:"},
-			{name: "keystorePasswd", kind: "onyx.Input", type: "password", placeholder: "Password..."}
-		]},
-		{kind: "onyx.Button", content: "Save", ontap: "savePassword"}
+		{ classes:"ares-row ares-drawer", components: [
+			{tag: "label", classes : "ares-bullet-label", content: "Signing Key: "},
+			{name: "keyPicker", kind: "onyx.PickerDecorator", onSelect: "selectKey", components: [
+				{kind: "onyx.PickerButton", content: "Choose..."},
+				{kind: "onyx.Picker", name: "keys"}
+			]},
+			// android, ios & blackberry: key password
+			{kind: "onyx.InputDecorator", components: [
+				{content: "Key:"},
+				{name: "keyPasswd", kind: "onyx.Input", type: "password", placeholder: "Password..."}
+			]},
+			// android-only: keystore password
+			{kind: "onyx.InputDecorator", name: "keystorePasswdFrm", showing: false, components: [
+				{content: "Keystore:"},
+				{name: "keystorePasswd", kind: "onyx.Input", type: "password", placeholder: "Password..."}
+			]},
+			{kind: "onyx.Button", content: "Save", ontap: "savePassword"}
+		]}
 	],
 	create: function() {
 		this.inherited(arguments);
@@ -287,7 +283,6 @@ enyo.kind({
 				active: (key.id === this.activeKeyId)
 			});
 		}, this);
-		this.$.keys.render();
 	},
 	/**
 	 * @private
@@ -298,10 +293,10 @@ enyo.kind({
 		if (key) {
 			// One of the configured keys
 			if (this.targetId === 'ios' || this.targetId === 'blackberry') {
-				// property named '.password' is defined by PhoneGap
+				// property named '.password' is defined by Phonegap
 				this.$.keyPasswd.setValue(key.password || "");
 			} else if (this.targetId === 'android') {
-				// properties named '.key_pw'and 'keystore_pw' are defined by PhoneGap
+				// properties named '.key_pw'and 'keystore_pw' are defined by Phonegap
 				this.$.keyPasswd.setValue(key.key_pw || "");
 				this.$.keystorePasswd.setValue(key.keystore_pw || "");
 				this.$.keystorePasswdFrm.show();
@@ -338,11 +333,13 @@ enyo.kind({
 	 */
 	getShowingKey: function() {
 		var key = this.getKey(this.activeKeyId);
-		if (this.targetId === 'ios' || this.targetId === 'blackberry') {
-			// property name '.password' is defined by PhoneGap
+		if (!key) {
+			return undefined;
+		} else if (this.targetId === 'ios' || this.targetId === 'blackberry') {
+			// property name '.password' is defined by Phonegap
 			key.password = this.$.keyPasswd.getValue();
 		} else if (this.targetId === 'android') {
-			// properties names '.key_pw'and 'keystore_pw' are defined by PhoneGap
+			// properties names '.key_pw'and 'keystore_pw' are defined by Phonegap
 			key.key_pw = this.$.keyPasswd.getValue();
 			key.keystore_pw = this.$.keystorePasswd.getValue();
 		}
@@ -352,8 +349,10 @@ enyo.kind({
 	 * @private
 	 */
 	savePassword: function(inSender, inValue) {
-		this.log("sender:", inSender, "value:", inValue);
-		this.provider.setKey(this.targetId, this.getShowingKey());
+		if (this.debug) this.log("sender:", inSender, "value:", inValue);
+		var key = this.getShowingKey();
+		if (this.debug) this.log("targetId:", this.targetId, "key:", key);
+		this.provider.setKey(this.targetId, key);
 	}
 });
 
