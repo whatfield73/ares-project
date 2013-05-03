@@ -5,11 +5,13 @@ enyo.depends(
 	"$lib/foss",
 	"source/",
 	"Ares.css",
+	"assets/css/effects.css",
+	"assets/css/sprites.css",
 	"$lib/extra/analyzer2",
 	"../utilities/source",
 	"../services/source",
 	"../phobos/source",
 	"../deimos/source",
 	"../harmonia/source",
-	"../project-view/source"
+	"../project-view"
 );

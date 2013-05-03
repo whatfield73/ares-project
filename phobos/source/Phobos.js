@@ -304,7 +304,6 @@ enyo.kind({
 	 	Disable "Designer" button unless project & enyo index are both valid
 	*/
 	manageDesignerButton: function() {
-		// var disabled = !(this.$.autocomplete.getProjectIndexer() && this.$.autocomplete.getEnyoIndexer());
 		var disabled = ! this.projectCtrl.fullAnalysisDone;
 		this.$.designerButton.setDisabled(disabled);
 	},
@@ -516,7 +515,7 @@ enyo.kind({
 					var prop = o.properties[j];
 					var pName = prop.name;
 					if (isDesignProperty[pName]) {
-						var value = Documentor.stripQuotes(prop.value[0].name);
+						var value = analyzer.Documentor.stripQuotes(prop.value[0].name);
 						comp[pName] = value;
 					}
 				}
