@@ -1,5 +1,5 @@
+/* global require, console, process, module */
 var path = require('path'),
-    fs = require('fs'),
     os = require('os'),
 	shell = require('./../../enyo/tools/node_modules/shelljs');
 
@@ -15,13 +15,13 @@ var srcDir = process.cwd(),
 	fopsSrcDir = path.resolve(srcDir, 'test/samples/FileOps');
 
 var enyoDir = path.resolve(tDir, '../enyo'),
- 	layoutDir = path.resolve(tDir, '../lib/layout'),
- 	onyxDir = path.resolve(tDir, '../lib/onyx'),
- 	lib = path.resolve(testDir, 'HelloWorld/lib');
+	layoutDir = path.resolve(tDir, '../lib/layout'),
+	onyxDir = path.resolve(tDir, '../lib/onyx'),
+	lib = path.resolve(testDir, 'HelloWorld/lib');
 
 (function() {
 
-        var tester = {
+    var tester = {
 			setup: function(req, res, next) {
 
 				// cleanup
@@ -62,8 +62,8 @@ var enyoDir = path.resolve(tDir, '../enyo'),
 			}
 		};
 
-        if (typeof module !== 'undefined' && module.exports) {
-                module.exports = tester;
-        }
+	if (typeof module !== 'undefined' && module.exports) {
+		module.exports = tester;
+	}
         
 }());

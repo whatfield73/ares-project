@@ -1,11 +1,13 @@
 #!/usr/bin/env node
-
+/* jshint node:true */
+/*global setImmediate,require,process*/
 /**
  *  ARES IDE server
  */
 
 var fs = require("fs"),
     path = require("path"),
+    createDomain = require('domain').create,
     express = require("express"),
     npmlog = require('npmlog'),
     nopt = require('nopt'),
@@ -22,17 +24,19 @@ var myDir = typeof(__dirname) !== 'undefined' ?  __dirname : path.resolve('') ;
 /**********************************************************************/
 
 var knownOpts = {
-        "help":            Boolean,
-        "runtest":         Boolean,
-        "browser":         Boolean,
-        "bundled-browser": Boolean,
-        "port":            Number,
-        "host":            String,
-        "listen_all":      Boolean,
-        "config":          path,
-        "level":           ['silly', 'verbose', 'info', 'http', 'warn', 'error'],
-        "log":             Boolean,
-        "version":         Boolean
+	"help":            Boolean,
+	"runtest":         Boolean,
+	"browser":         Boolean,
+	"bundled-browser": Boolean,
+	"port":            Number,
+	"host":            String,
+	"timeout":         Number,
+	"listen_all":      Boolean,
+	"dev-mode":        Boolean,
+	"config":          path,
+	"level":           ['silly', 'verbose', 'info', 'http', 'warn', 'error'],
+	"log":             Boolean,
+	"version":         Boolean
 };
 var shortHands = {
 	"h": ["--help"],
@@ -41,6 +45,8 @@ var shortHands = {
 	"B": ["--bundled-browser"],
 	"p": ["--port"],
 	"H": ["--host"],
+	"D": ["--dev-mode"],
+	"t": ["--timeout"],
 	"a": ["--listen_all"],
 	"c": ["--config"],
 	"l": ["--level"],
@@ -52,6 +58,11 @@ var argv = nopt(knownOpts, shortHands, process.argv, 2 /*drop 'node' & 'ide.js'*
 argv.config = argv.config || path.join(myDir, "ide.json");
 argv.host = argv.host || "127.0.0.1";
 argv.port = argv.port || 9009;
+argv.timeout = argv.timeout || (4*60*1000);	//default: 4 minutes.
+	
+if (process.env['ARES_BUNDLE_BROWSER'] && !argv['bundled-browser']) {
+	delete process.env['ARES_BUNDLE_BROWSER'];
+}
 
 if (argv.help) {
 	console.log("\n" +
@@ -64,8 +75,10 @@ if (argv.help) {
 		"  -T, --runtest         Run the non-regression test suite                                                     [boolean]\n" +
 		"  -b, --browser         Open the default browser on the Ares URL                                              [boolean]\n" +
 		"  -B, --bundled-browser Open the included browser on the Ares URL                                             [boolean]\n" +
+		"  -D, --dev-mode        Load non-minified version of Ares and Enyo for Ares debug and development             [boolean]\n" +
 		"  -p, --port        b   port (o) local IP port of the express server (default: 9009, 0: dynamic)              [default: '9009']\n" +
 		"  -H, --host        b   host to bind the express server onto                                                  [default: '127.0.0.1']\n" +
+		"  -t, --timeout     b   milliseconds of inactivity before a server socket is presumed to have timed out       [default: '240000']\n" +
 		"  -a, --listen_all  b   When set, listen to all adresses. By default, listen to the address specified with -H [boolean]\n" +
 		"  -c, --config      b   IDE configuration file                                                                [default: './ide.json']\n" +
 		"  -l, --level       b   IDE debug level ('silly', 'verbose', 'info', 'http', 'warn', 'error')                 [default: 'http']\n" +
@@ -100,7 +113,7 @@ function m() {
 		} else {
 			msg += arg;
 		}
-			msg += ' ';
+		msg += ' ';
 	}
 	return msg;
 }
@@ -121,7 +134,6 @@ process.on('SIGINT', onExit);
 // Load IDE configuration & start per-project file servers
 
 var ide = {};
-var service = {};
 var subProcesses = [];
 var platformVars = [
 	{regex: /@NODE@/, value: process.argv[0]},
@@ -136,14 +148,9 @@ var platformOpen = {
 	linux: [ "xdg-open" ]
 };
 
-var bundledBrowser = {
-	win32: [ path.resolve ( myDir + "../../chromium/" + "chrome.exe" ) ],
-	darwin:[ path.resolve ( myDir + "../../../../bin/chromium/" + "Chromium.app" ), "--args" ],
-	linux: [ path.resolve ( myDir + "../../../../bin/chromium/" + "chrome" ) ]
-};
-
 var configPath, tester;
 var configStats;
+var aresAboutData;
 var serviceMap = {};
 
 if (argv.runtest) {
@@ -152,18 +159,22 @@ if (argv.runtest) {
 } else{
 	configPath = argv.config;
 }
+function checkFile(inFile) {
+	var fileStats;
+	if (!fs.existsSync(inFile)) {
+		throw new Error("Did not find: '"+inFile+"': ");
+	}
+
+	fileStats = fs.lstatSync(inFile);
+	if (!fileStats.isFile()) {
+		throw new Error("Not a file: '"+inFile+"': ");
+	}
+	return fileStats;
+}
 
 function loadMainConfig(configFile) {
-	if (!fs.existsSync(configFile)) {
-		throw "Did not find: '"+configFile+"': ";
-	}
-
-	log.verbose('loadMainConfig()', "Loading ARES configuration from '"+configFile+"'...");
-	configStats = fs.lstatSync(configFile);
-	if (!configStats.isFile()) {
-		throw "Not a file: '"+configFile+"': ";
-	}
-
+	configStats = checkFile(configFile);
+	log.verbose('loadMainConfig()', "Loading ARES configuration from '" + configFile + "'...");
 	var configContent = fs.readFileSync(configFile, 'utf8');
 	try {
 		ide.res = JSON.parse(configContent);
@@ -172,8 +183,25 @@ function loadMainConfig(configFile) {
 	}
 
 	if (!ide.res.services || !ide.res.services[0]) {
-		throw "Corrupted '"+configFile+"': no storage services defined";
+		throw new Error("Corrupted '"+configFile+"': no storage services defined");
 	}
+}
+function loadPackageConfig() {
+	var packagePath = path.resolve(myDir, "package.json");
+	checkFile(packagePath);
+	var packageContentJSON = fs.readFileSync(packagePath, 'utf8');
+	try {	
+		var packageContent = JSON.parse(packageContentJSON);
+		aresAboutData = {
+			"version": packageContent.version,
+			"bugReportURL": packageContent.bugs.url, 
+			"license": packageContent.license,
+			"projectHomePage": packageContent.homepage
+		};
+		
+	} catch(e) {
+		throw new Error("Improper JSON: " + packagePath);
+	}	
 }
 
 function getObjectType(object) {
@@ -214,19 +242,29 @@ function mergePluginConfig(service, newdata, configFile) {
 
 function appendPluginConfig(configFile) {
 	log.verbose('appendPluginConfig()', "Loading ARES plugin configuration from '"+configFile+"'...");
-	var pluginDir = path.dirname(configFile),
-	    pluginUrl = '../' + path.relative(myDir, pluginDir).replace('\\','/');
+	var pluginDir = path.dirname(configFile);
 	log.verbose('appendPluginConfig()', 'pluginDir:', pluginDir);
-	log.verbose('appendPluginConfig()', 'pluginUrl:', pluginUrl);
 
-	var pluginData,
-	    configContent = fs.readFileSync(configFile, 'utf8');
+	var pluginData, configContent;
 	try {
+		configContent = fs.readFileSync(configFile, 'utf8');
 		pluginData = JSON.parse(configContent);
 	} catch(e) {
-		throw "Improper JSON in " + configFile + " : "+configContent;
+		throw new Error("Unable to load or JSON-parse '" + configFile + "' (" + e.toString() + ")");
 	}
 	
+	// The service in the plugin configuration file that is both
+	// active and has a defined 'type` property is the main
+	// plugin.
+	var pluginService = pluginData.services.filter(function(service) {
+		return service.active && service.type;
+	})[0];
+	var pluginUrl = '/res/plugins/' + pluginService.id;
+	log.verbose('appendPluginConfig()', 'pluginUrl:', pluginUrl);
+
+	pluginService.pluginDir = pluginDir;
+	pluginService.pluginUrl = pluginUrl;
+
 	pluginData.services.forEach(function(service) {
 		// Apply regexp to all properties
 		substVars(service, [
@@ -276,12 +314,30 @@ function loadPluginConfigFiles() {
 	log.info('loadPluginConfigFiles()', "loaded " + nPlugins + " plugins");
 }
 
+
+/**
+ * load proxy from environment in each service (only if proxy is
+ * missing from original config)
+ */
+function loadProxyFromEnv() {
+	ide.res.services.forEach(function(s){
+		if (! s.proxyUrl) {
+			s.proxyUrl = ide.res.globalProxyUrl || process.env.https_proxy || process.env.http_proxy;
+		}
+	});
+}
+
 loadMainConfig(configPath);
 loadPluginConfigFiles();
 
-// configuration age/date is the UTC configuration file last modification date
+loadPackageConfig();
+
+loadProxyFromEnv();
+
+// File age/date is the UTC configuration file last modification date
 ide.res.timestamp = configStats.atime.getTime();
 log.verbose('main', ide.res);
+
 
 function handleMessage(service) {
 	return function(msg) {
@@ -304,11 +360,13 @@ function handleMessage(service) {
 					'content-type': 'application/json'
 				}
 			};
+			log.http(service.id, "POST /config");
 			var creq = http.request(options, function(cres) {
-				log.http(service.id, "POST /config response.status=" + cres.statusCode);
+				log.http(service.id, "POST /config", cres.statusCode);
 			}).on('error', function(e) {
 				throw e;
 			});
+			log.verbose(service.id, "config:", service);
 			creq.write(JSON.stringify({config: service}, null, 2));
 			creq.end();
 		} else {
@@ -362,9 +420,7 @@ function substVars(data, vars) {
 		var pType = getObjectType(data[key]);
 		if (pType === 'string') {
 			s = data[key];
-			vars.forEach(function(subst){
-				s = s.replace(subst.regex,subst.value);
-			});
+			s = substitute(s, vars);
 			data[key] = s;
 		} else if (pType === 'array') {
 			substVars(data[key], vars);
@@ -374,6 +430,13 @@ function substVars(data, vars) {
 		// else - Nothing to do (no substitution on non-string
 		// properties)
 	}
+}
+
+function substitute(s, vars) {
+	vars.forEach(function(subst){
+		s = s.replace(subst.regex,subst.value);
+	});
+	return s;
 }
 
 function startService(service) {
@@ -408,6 +471,13 @@ function startService(service) {
 	subProcesses.push(subProcess);
 }
 
+var unproxyfiableHeaders = [
+	"Access-Control-Allow-Methods", 
+	"Access-Control-Allow-Headers", 
+	"Access-Control-Allow-Origin", 
+	"Access-Control-Expose-Headers"
+];
+
 function proxyServices(req, res, next) {
 	log.verbose('proxyServices()', m("req.params:", req.params, ", req.query:", req.query));
 	var query = {},
@@ -416,7 +486,7 @@ function proxyServices(req, res, next) {
 		    return service.id === id;
 	    })[0];
 	if (!service) {
-		next(new HttpError('No such service: ' + id, 403));
+		setImmediate(next, new HttpError('No such service: ' + id, 403));
 		return;
 	}
 	for (var key in req.query) {
@@ -431,7 +501,7 @@ function proxyServices(req, res, next) {
 		port:   service.dest.port,
 		// path to forward to
 		path:   service.dest.pathname +
-			(req.params[0] ? '/' + req.params[0] : '') +
+			(req.params[0] ? '/' + encodeURI(req.params[0]) : '') +
 			'?' + querystring.stringify(query),
 		// request method
 		method: req.method,
@@ -440,22 +510,33 @@ function proxyServices(req, res, next) {
 	};
 	log.verbose('proxyServices()', m("options:", options));
 
+	// ENYO-3634: if we proxyfy a CORS request, it's not CORS anymore between ARES and proxyfied service
+	// so we remove CORS request headers (note that OPTIONS requests should never make it to here!)
+	if (options.headers && options.headers.origin) {
+		delete options.headers.origin;
+	}
+
 	var creq = http.request(options, function(cres) {
 		// transmit every header verbatim, but cookies
 		log.verbose('proxyServices()', m("cres.headers:", cres.headers));
 		for (var key in cres.headers) {
 			var val = cres.headers[key];
 			if (key.toLowerCase() === 'set-cookie') {
+				// re-write cookies
 				var cookies = parseSetCookie(val);
 				cookies.forEach(translateCookie.bind(this, service, res));
 			} else {
-				res.header(key, val);
+				// ENYO-3634 / CORS is the sole responsibility of the ARES server when services are proxified
+				// therefore should the service have fixed CORS headers, they are ignored.
+				if (unproxyfiableHeaders.indexOf(key) === -1) {
+					res.header(key, val);
+				}
 			}
 		}
-		// re-write cookies
 		res.writeHead(cres.statusCode);
 		cres.pipe(res);
 	}).on('error', function(e) {
+		log.error('proxyServices()', "options:", options);
 		next(e);
 	});
 	req.pipe(creq);
@@ -523,59 +604,184 @@ ide.res.services.filter(function(service){
 
 // Start the ide server
 
-var enyojsRoot = path.resolve(myDir,".");
+var app = express(),
+    server = http.createServer(app);
 
-var app, server;
-if (express.version.match(/^2\./)) {
-	// express-2.x
-	app = express.createServer();
-	server = app;
-} else {
-	// express-3.x
-	app = express();
-	server = http.createServer(app);
+/**
+ * Ares server timeout is defined as the maximum value of services timeout attributes.
+ * @param  {integer} inTimeout default value of the server timeout.
+ */
+function defineServerTimeout(inTimeout) {
+
+	var timeout = inTimeout;
+
+	for (var key in ide.res.services) {
+
+		if (ide.res.services[key].timeout !== undefined && 
+			ide.res.services[key].timeout > inTimeout) {
+			timeout = ide.res.services[key].timeout;
+		}
+	}
+	
+	log.verbose("Timeout between main server and its children is set to : ", timeout ," (ms)");
+	server.setTimeout(timeout);
 }
 
-function cors(req, res, next) {
-	/*
-	 * - Lowercase HTTP headers, work-around an iPhone bug
-	 * - Overrriden by each individual service behind '/res/services/:service'
-	 */
-	res.header('access-control-allow-origin', '*' /*FIXME: config.allowedDomains*/);
-	res.header('access-control-allow-methods', 'GET,POST');
-	res.header('access-control-allow-headers', 'Content-Type');
-	next();
+
+defineServerTimeout(argv.timeout);
+
+// over-write CORS headers using the configuration if
+// any, otherwise be paranoid.
+
+var corsHeaders,
+    allowedMethods = ['GET', 'PUT', 'POST', 'DELETE'],
+    exposedHeaders = ['x-content-type'],
+    allowedHeaders = ['Content-Type','Authorization','Cache-Control','X-HTTP-Method-Override'];
+
+function setCorsHeaders(req, res, next) {
+	var cors = ide.res.cors || {};
+	var origins = (Array.isArray(cors.origins) && cors.origins.length > 0 && cors.origins);
+
+	// one time setup - allowed methods and headers don't change per request
+	if (!corsHeaders) {
+		var methods = Array.isArray(cors.methods) && cors.methods,
+		    headers = Object.keys(ide.res.headers || {});
+		corsHeaders = {};
+		corsHeaders['Access-Control-Allow-Methods'] = allowedMethods.concat(methods).join(',');
+		corsHeaders['Access-Control-Allow-Headers'] = allowedHeaders.concat(headers).join(',');
+		corsHeaders['Access-Control-Expose-Headers'] = exposedHeaders.concat(headers).join(',');
+		corsHeaders['Access-Control-Max-Age'] = '86400';
+		corsHeaders['Access-Control-Allow-Credentials'] = 'true';
+		log.info("setCorsHeaders()", "CORS will use:", corsHeaders);
+	}
+
+	// request time: is this a CORS request? [CLUE: if yes, there's an origin]
+	if (req.headers && req.headers.origin) {
+		if (origins.indexOf("*") !== -1) {
+			corsHeaders['Access-Control-Allow-Origin'] = "*";
+		} else {
+			if (origins.indexOf(req.headers.origin) !== -1) {
+				corsHeaders['Access-Control-Allow-Origin'] = req.headers.origin;
+			} else {
+				corsHeaders['Access-Control-Allow-Origin'] = "";
+			}
+		}
+		for (var h in corsHeaders) {
+			log.silly("setCorsHeaders()", h, ":", corsHeaders[h]);
+			// Lowercase HTTP headers, work-around an iPhone bug
+			res.header(h.toLowerCase(), corsHeaders[h]);
+		}
+	} 
+	if ('OPTIONS' === req.method) {
+		res.status(200).end();
+	} else {
+		setImmediate(next);
+	}
+}
+
+function setUserHeaders(req, res, next) {
+	var headers = ide.res.headers || {};
+	for (var k in headers) {
+		var v = headers[k];
+		log.silly('setUserHeaders()', "adding:", k, ":", v);
+		res.header(k, v);
+	}
+	setImmediate(next);
 }
 
 app.configure(function(){
 
-	app.use(cors);
-	app.use(express.favicon(myDir + '/ares/assets/images/ares_48x48.ico'));
+	/*
+	 * Error Handling - Wrap exceptions in delayed handlers
+	 */
+	app.use(function _useDomain(req, res, next) {
+		var domain = createDomain();
+		
+		domain.on('error', function(err) {
+			next(err);
+			domain.dispose();
+		});
+		
+		domain.enter();
+		setImmediate(next);
+	});
 
-	app.use('/ide', express.static(enyojsRoot + '/'));
-	app.use('/test', express.static(enyojsRoot + '/test'));
+	app.use(setCorsHeaders);
+	app.use(setUserHeaders);
+
+	app.use(express.favicon(myDir + '/assets/images/ares_48x48.ico'));
+
+	["preview", "ide"].forEach(function(client) {
+		var dir = path.resolve(myDir, "_ares");
+		if (argv['dev-mode'] || !fs.existsSync(dir)) {
+			dir = myDir;
+		}
+		log.info("main", "Loading url: /" + client + " from folder:", dir);
+		app.use('/' + client, express.static(dir));
+		app.use('/' + client + '/lib', express.static(path.join(myDir, 'lib')));
+		app.use('/' + client + '/assets', express.static(path.join(myDir, 'assets')));
+	});
+
+	app.use('/test', express.static(path.join(myDir, '/test')));
 
 	app.use(express.logger('dev'));
 
+	// Real home is '/ide/'
 	app.get('/', function(req, res, next) {
 		log.http('main', "GET /");
-		res.redirect('/ide/ares/');
+		res.redirect(req.url.replace(/$|\?/,"ide/$&"));
 	});
+	// Compatibility redirection to not invalidate bookmarks to
+	// former home.
+	app.get('/ide/ares*', function(req, res, next) {
+		log.http('main', "GET /ide/ares*");
+		res.redirect(req.url.replace(/ares($|\/|\?)/,""));
+	});
+
 	app.get('/res/timestamp', function(req, res, next) {
 		res.status(200).json({timestamp: ide.res.timestamp});
 	});
 	app.get('/res/services', function(req, res, next) {
-		log.http('main', m("GET /res/services:", ide.res.services));
+		log.verbose('main', m("GET /res/services:", ide.res.services));
 		res.status(200).json({services: ide.res.services});
+	});
+	app.get('/res/aboutares', function(req, res, next) {		
+		res.status(200).json({aboutAres: aresAboutData});
+	});
+	app.get('/res/language', function(req, res, next) {
+		log.verbose('main', m("GET /res/language:", ide.res.language));		
+		res.status(200).json({language: ide.res.language});
 	});
 	app.all('/res/services/:serviceId/*', proxyServices);
 	app.all('/res/services/:serviceId', proxyServices);
+
+	// access to static files provided by the plugins
+	ide.res.services.forEach(function(service) {
+		if (service.pluginUrl && service.pluginDir) {
+			log.verbose('app.configure()', service.pluginUrl + ' -> ' + service.pluginDir);
+			app.use(service.pluginUrl, express.static(service.pluginDir));
+		}
+	});
 
 	if (tester) {
 		app.post('/res/tester', tester.setup);
 		app['delete']('/res/tester', tester.cleanup);
 	}
 
+	/**
+	 * Global error handler (last plumbed middleware)
+	 * @private
+	 */
+	function errorHandler(err, req, res, next){
+		log.error('errorHandler()', err.stack);
+		res.status(500).send(err.toString());
+	}
+	
+	// express-3.x: middleware with arity === 4 is
+	// detected as the error handler
+	app.use(errorHandler.bind(this));
+	
+	log.verbose('app.configure()', "done");
 });
 
 // Run non-regression test suite
@@ -584,17 +790,27 @@ var page = "index.html";
 if (argv.runtest) {
 	page = "test.html";
 }
+var origin, url;
 
 server.listen(argv.port, argv.listen_all ? null : argv.host, null /*backlog*/, function () {
-	var tcpAddr = server.address();
-	var url = "http://" + (argv.host || "127.0.0.1") + ":" + tcpAddr.port + "/ide/ares/" + page;
+	var tcpAddr = server.address(),
+	    info;
+	origin = "http://" + (argv.host || "127.0.0.1") + ":" + tcpAddr.port;
+	url = origin + "/ide/" + page;
 	if (argv.browser) {
 		// Open default browser
-		var info = platformOpen[process.platform] ;
+		info = platformOpen[process.platform] ;
 		spawn(info[0], info.slice(1).concat([url]));
 	} else if (argv['bundled-browser']) {
 		// Open bundled browser
-		var info = platformOpen[process.platform].concat(bundledBrowser[process.platform]);
+		var bundledBrowser = process.env['ARES_BUNDLE_BROWSER'];
+		info = platformOpen[process.platform];
+		if (bundledBrowser) {
+			if (process.platform === 'win32') {
+				info.splice(2, 1); // delete 'start' command
+			}
+			info = info.concat([bundledBrowser, '--args']);
+		} 
 		spawn(info[0], info.slice(1).concat([url]));
 	} else {
 		log.http('main', "Ares now running at <" + url + ">");

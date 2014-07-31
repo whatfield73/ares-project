@@ -1,17 +1,17 @@
+/* jshint node:true */
 /**
  * Hermes ZIP archival service
  */
 
 // nodejs version checking is done in parent process ide.js
 
-var fs = require("fs");
-var path = require("path");
-var express = require("express");
-var util  = require("util");
-var querystring = require("querystring");
-var temp = require("temp");
-var zipstream = require('zipstream');
-var formidable = require('formidable');
+var fs = require("fs"),
+	path = require("path"),
+	express = require("express"),
+	util  = require("util"),
+	temp = require("temp"),
+	zipstream = require('zipstream'),
+	formidable = require('formidable');
 
 function ArZip(config, next) {
 	function HttpError(msg, statusCode) {
@@ -32,11 +32,10 @@ function ArZip(config, next) {
 	app.use(function(req, res, next) {
 		res.header('Access-Control-Allow-Origin', "*"); // XXX be safer than '*'
 		res.header('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE');
-		res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+		res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-HTTP-Method-Override');
 		if ('OPTIONS' == req.method) {
 			res.status(200).end();
-		}
-		else {
+		} else {
 			next();
 		}
 	});
@@ -121,10 +120,12 @@ function ArZip(config, next) {
 				_nextTask();
 			});
 
-			function _nextTask() {
+			var _nextTask = function() {
 				var task = tasks.shift();
-				task && task();
-			}
+				if (task) {
+					task();
+				}
+			};
 
 			form.parse(req, function(err) {
 				if (err) {
@@ -132,13 +133,15 @@ function ArZip(config, next) {
 				}
 			});
 
-			function _clean(next) {
+			var _clean = function(next) {
 				var file, count = files.length;
 				function _rmdir() {
-					(count === 0) && fs.rmdir(form.uploadDir, next);
+					if (count === 0) {
+						fs.rmdir(form.uploadDir, next);
+					}
 				}
 				_rmdir();
-				while ((file = files.shift())) {
+				function disconnect(file) {
 					fs.unlink(file.path, function(err) {
 						if (err) {
 							next(err);
@@ -148,8 +151,10 @@ function ArZip(config, next) {
 						_rmdir();
 					});
 				}
-			}
-
+				while ((file = files.shift())) {
+					disconnect(file);
+				}
+			};
 		} catch(e) {
 			console.error(e.stack);
 			next(new HttpError(e.msg));
@@ -181,7 +186,7 @@ function ArZip(config, next) {
 if (path.basename(process.argv[1]) === "arZip.js") {
 	// We are main.js: create & run the object...
 
-	var arZip = new ArZip({
+	new ArZip({
 		// pathname (M) can be '/', '/zip/' ...etc
 		pathname:	process.argv[2],
 		// port (o) local IP port of the express server (default: 9019, 0: dynamic)

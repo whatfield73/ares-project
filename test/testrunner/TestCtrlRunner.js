@@ -16,7 +16,9 @@ enyo.kind({
 			aresRunner.runTests();
 		} else {
 			// Popup to inform results are available into console when executing tests on IE	
-			if (aresTestW === null) this.$.infoPopup.show();
+			if (window.aresTestW === null) {
+				this.$.infoPopup.show();
+			}
 			// No new test to run, we need to remove the temp test/root directory
 			var req = new enyo.Ajax({
 				url: '/res/tester',
@@ -32,28 +34,28 @@ enyo.kind({
 });
 
 enyo.kind({
-		name: "InfoPopup",
-		kind: "onyx.Popup",
-		events: {
-			onCancel: ""
-		},
-		modal: true,
-		centered: true,
-		floating: true,
-		components: [
-			{tag: "h3", content: "The results of the Ares TestRunner are available in the console!!"},
-			{tag: "br"},
-			{kind: "FittableColumns", components: [
-				{name: "cancelButton", kind: "onyx.Button", content: "cancel", ontap: "deleteCancel"},
-				{fit: true},
-			]}
-		],
-		create: function() {
-			this.inherited(arguments);
-		},
-		deleteCancel: function(inSender, inEvent) {
-			this.hide();
-			this.doCancel();
-		}
+	name: "InfoPopup",
+	kind: "onyx.Popup",
+	events: {
+		onCancel: ""
+	},
+	modal: true,
+	centered: true,
+	floating: true,
+	components: [
+		{tag: "h3", content: "The results of the Ares TestRunner are available in the console!!"},
+		{tag: "br"},
+		{kind: "FittableColumns", components: [
+			{name: "cancelButton", kind: "onyx.Button", content: "cancel", ontap: "deleteCancel"},
+			{fit: true},
+		]}
+	],
+	create: function() {
+		this.inherited(arguments);
+	},
+	deleteCancel: function(inSender, inEvent) {
+		this.hide();
+		this.doCancel();
+	}
 });
 

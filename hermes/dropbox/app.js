@@ -1,11 +1,10 @@
+/* global require, console, module */
 /**
  * Module dependencies.
  */
 
-var 
-	express = require('express'),
-	routes = require('./routes')
-	;
+var express = require('express'),
+	routes = require('./routes');
 
 var app = module.exports = express.createServer();
 
@@ -19,8 +18,7 @@ var cors = function(req, res, next) {
 	// intercept OPTIONS method
 	if ('OPTIONS' == req.method) {
 		res.send(200);
-	}
-	else {
+	} else {
 		next();
 	}
 };
